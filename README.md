@@ -1,4 +1,4 @@
-# Acoustic Multirotor Unmanned Aerial Vehicle (UAV) Identification Using Deep Neural Networks
+# Acoustic-based UAV Detection using Deep Neural Networks
 FYP repository with scripts and experimentally collected audio.
 
 The recorded audios are available from:
