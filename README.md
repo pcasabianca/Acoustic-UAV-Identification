@@ -1,5 +1,7 @@
 # Acoustic-based UAV Detection Using Late Fusion of Deep Neural Networks
-FYP repository with scripts and experimentally collected audio.
+Paper repository with scripts and experimentally collected audio.
+
+The paper is available to read for free [here](https://www.mdpi.com/2504-446X/5/3/54).
 
 ## Python Packages and Versions
 **Python 3.8**
