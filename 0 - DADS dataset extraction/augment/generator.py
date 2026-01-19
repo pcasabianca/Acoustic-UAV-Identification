@@ -252,6 +252,40 @@ def process_task(task: Dict[str, Any]):
         except Exception as e:
             debug = {'error': str(e)}
 
+        # Attempt to write output files from the worker process to avoid
+        # transferring large numpy arrays back to the master via multiprocessing.
+        try:
+            from .writer import SplitWriter as _SplitWriter
+            _out = globals().get('out', None)
+            if _out is not None:
+                w = _SplitWriter(_out / task['split'])
+                # write wav and append metadata atomically from worker
+                try:
+                    w.write_wav(str(task['label']), task['filename'], processed_audio, task['sr'])
+                    debug_meta = {'master_seed': globals().get('master_seed')}
+                    debug_meta.update(debug if isinstance(debug, dict) else {})
+                    if task.get('offline_src'):
+                        try:
+                            from pathlib import Path as _P
+                            debug_meta['offline_source'] = _P(task.get('offline_src')).name
+                        except Exception:
+                            debug_meta['offline_source'] = task.get('offline_src')
+                    w.append_jsonl(task.get('train_meta', {}), debug_meta)
+                    return {
+                        'written': True,
+                        'filename': task['filename'],
+                        'split': task['split'],
+                        'label': task['label'],
+                        'train_meta': task.get('train_meta', {}),
+                        'debug_meta': debug_meta,
+                    }
+                except Exception:
+                    # fall through to returning in-memory result if worker write fails
+                    pass
+        except Exception:
+            pass
+
+        # Fallback: return small result without huge arrays so master can write it
         return {
             'filename': task['filename'],
             'split': task['split'],
@@ -305,6 +339,23 @@ def run_build(build_config_path: str, out_dir: str, dry_run=False, show_progress
 
     info_name = cfg.get('output', {}).get('info_filename', 'augmentation_samples.jsonl')
 
+    # helper: robust write to handle PermissionError (try chmod+retry)
+    def _safe_write_text(path_obj, text, encoding='utf-8'):
+        try:
+            path_obj.write_text(text, encoding=encoding)
+            return
+        except PermissionError:
+            try:
+                import os, stat
+                os.chmod(path_obj, stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH)
+            except Exception:
+                pass
+            try:
+                path_obj.write_text(text, encoding=encoding)
+                return
+            except Exception as e:
+                raise
+
     # prepare split dirs and meta files
     splits = ('dataset_train', 'dataset_val', 'dataset_test')
     for s in splits:
@@ -312,7 +363,7 @@ def run_build(build_config_path: str, out_dir: str, dry_run=False, show_progress
         d.mkdir(parents=True, exist_ok=True)
         meta = d / info_name
         # Always truncate the meta file so runs are idempotent and overwrite previous
-        meta.write_text('', encoding='utf-8')
+        _safe_write_text(meta, '', encoding='utf-8')
 
     # determine totals (use total_samples and split_ratio)
     # allow caller override via `total` argument
@@ -421,6 +472,14 @@ def run_build(build_config_path: str, out_dir: str, dry_run=False, show_progress
                     'seed_key': seed_key_full,
                     'split': split_name,
                 }
+                # Include deterministic scenario identifier in train_meta so downstream
+                # tools (testers/visualizers) can consume `metadata.scenario` directly.
+                # Use the scenario name if available, otherwise fall back to an index-based id.
+                try:
+                    scn_name = scn.get('name') if isinstance(scn, dict) and scn.get('name') else None
+                except Exception:
+                    scn_name = None
+                train_meta['scenario'] = scn_name or f'scn_{i}'
                 src = None
                 pool_label = offline_pool_label.get(class_label, [])
                 if pool_label:
@@ -513,23 +572,29 @@ def run_build(build_config_path: str, out_dir: str, dry_run=False, show_progress
                 except Exception:
                     pass
                 continue
-            split = r['split']
-            writer = writers.get(split)
-            try:
-                writer.write_wav(str(r['label']), r['filename'], r['processed_audio'], sr)
-                debug_meta = {'master_seed': master_seed}
-                debug_meta.update(r.get('debug', {}) if isinstance(r.get('debug', {}), dict) else {})
-                if r.get('offline_source'):
-                    try:
-                        from pathlib import Path as _P
-                        debug_meta['offline_source'] = _P(r.get('offline_source')).name
-                    except Exception:
-                        debug_meta['offline_source'] = r.get('offline_source')
-                writer.append_jsonl(r['train_meta'], debug_meta)
+            # If the worker already wrote the file, it will return {'written': True}
+            if r.get('written'):
                 written += 1
+                split = r.get('split')
                 written_per_split[split] = written_per_split.get(split, 0) + 1
-            except Exception:
-                errors += 1
+            else:
+                split = r['split']
+                writer = writers.get(split)
+                try:
+                    writer.write_wav(str(r['label']), r['filename'], r['processed_audio'], sr)
+                    debug_meta = {'master_seed': master_seed}
+                    debug_meta.update(r.get('debug', {}) if isinstance(r.get('debug', {}), dict) else {})
+                    if r.get('offline_source'):
+                        try:
+                            from pathlib import Path as _P
+                            debug_meta['offline_source'] = _P(r.get('offline_source')).name
+                        except Exception:
+                            debug_meta['offline_source'] = r.get('offline_source')
+                    writer.append_jsonl(r['train_meta'], debug_meta)
+                    written += 1
+                    written_per_split[split] = written_per_split.get(split, 0) + 1
+                except Exception:
+                    errors += 1
 
             # report progress every pct_step
             pct_done = (written / total_tasks) * 100 if total_tasks > 0 else 100.0

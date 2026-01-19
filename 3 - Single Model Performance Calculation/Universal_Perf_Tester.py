@@ -22,6 +22,7 @@ import multiprocessing
 import re
 from collections import defaultdict
 from datetime import datetime
+import typing
 
 # Some saved models include Python `Lambda` layers. Keras disallows deserializing
 # arbitrary Python lambdas by default for safety. Enable unsafe deserialization
@@ -133,42 +134,99 @@ def main():
         expected_categories[filename] = labels[i]
     
     # 6. Fonction pour extraire sous-catégorie du nom de fichier
-    def extract_subcategory(filename, label):
+    def load_metadata_jsonl(jsonl_path: Path) -> typing.Dict[str, dict]:
+        """Charge un fichier JSONL d'augmentation et retourne un mapping filename -> metadata dict.
+
+        Comportement strict: l'absence du fichier JSONL ou l'absence d'entrée pour un
+        filename attendu lèvera une erreur. Aucune heuristique sur le nom de fichier
+        n'est utilisée pour déduire des métadonnées.
         """
-        Extrait la sous-catégorie d'un fichier:
-        - Pour drones (label 1): distance (500m, 600m, etc.) ou "orig_drone"
-        - Pour non-drones (label 0): type ambient ou "orig_ambient"
-        """
-        # Fichiers originaux DADS (dads_0_xxx ou dads_1_xxx)
-        if filename.startswith('dads_'):
-            if label == 1:
-                return 'orig_drone'
-            else:
-                return 'orig_ambient'
-        
-        # Fichiers originaux non-augmentés (orig_)
-        if filename.startswith('orig_'):
-            if label == 1:
-                return 'orig_drone'
-            else:
-                return 'orig_ambient'
-        
-        # Pattern: aug_[category]_[...]
-        match = re.match(r'aug_([^_]+(?:_[^_]+)?)_', filename)
-        if not match:
-            return 'unknown'
-        
-        category = match.group(1)
-        
-        if label == 1:  # Drone
-            # Extraire la distance (drone_500m, drone_600m, etc.)
-            dist_match = re.search(r'drone_(\d+)m', category)
-            if dist_match:
-                return f"{dist_match.group(1)}m"
-            return category
-        else:  # Non-drone
-            # Retourner le type d'ambient (cafe, traffic, etc.)
-            return category.replace('_', ' ')
+        jsonl_path = Path(jsonl_path)
+        if not jsonl_path.exists():
+            raise RuntimeError(f"Metadata JSONL manquant: {jsonl_path}")
+
+        mapping = {}
+        with jsonl_path.open('r', encoding='utf-8') as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    # skip malformed lines
+                    continue
+
+                meta = obj.get('train_meta') or obj.get('meta') or obj.get('info') or {}
+                debug = obj.get('debug_meta') or obj.get('debug') or {}
+
+                filename = meta.get('filename') or meta.get('file') or meta.get('audio_filepath')
+                if not filename:
+                    # cannot map this JSONL entry to a file
+                    continue
+
+                # Minimal normalized metadata we keep
+                entry = {
+                    'raw_meta': meta,
+                    'raw_debug': debug,
+                    'label': int(meta['label']) if 'label' in meta and meta['label'] is not None else None,
+                    'class_name': meta.get('class_name') or meta.get('class'),
+                    'scenario': meta.get('scenario'),
+                }
+
+                # try extract distance if present in debug.mix_details (do NOT infer from filename)
+                distance = None
+                for md in (debug.get('mix_details') or []) or []:
+                    if isinstance(md, dict) and 'requested_distance_m' in md:
+                        try:
+                            distance = float(md.get('requested_distance_m'))
+                            break
+                        except Exception:
+                            pass
+                entry['distance_m'] = distance
+
+                # Deterministic derivation of `scenario` when missing from dataset JSONL.
+                # Priority:
+                # 1. dataset-provided `scenario`
+                # 2. derive from `debug_meta.offline_source`: dads_0_* -> orig_ambient, dads_1_* -> orig_drone
+                # 3. derive from extracted `distance_m` (e.g., '500m') when class indicates drone
+                # 4. leave as None (strict callers will fail if they require it)
+                if not entry.get('scenario'):
+                    derived = None
+                    try:
+                        offline = debug.get('offline_source') if isinstance(debug, dict) else None
+                        if isinstance(offline, str):
+                            if offline.startswith('dads_0_'):
+                                derived = 'orig_ambient'
+                            elif offline.startswith('dads_1_'):
+                                derived = 'orig_drone'
+                    except Exception:
+                        derived = None
+
+                    if derived is None and entry.get('distance_m') is not None:
+                        try:
+                            d = float(entry['distance_m'])
+                            derived = f"{int(d)}m" if d.is_integer() else f"{d}m"
+                        except Exception:
+                            derived = None
+
+                    if derived is not None:
+                        entry['scenario'] = derived
+
+                # Index mapping by the filename recorded in the JSONL and also by its basename.
+                # Many dataset JSONL store filenames with a subdirectory prefix (e.g. "0/dads_sample_..")
+                # while code that enumerates WAV files uses bare basenames. Index both forms
+                # deterministically from the JSONL content (no heuristics based on WAV names).
+                mapping[filename] = entry
+                try:
+                    base = Path(filename).name
+                    if base and base != filename:
+                        mapping[base] = entry
+                except Exception:
+                    # if Path parsing fails for any reason, skip adding basename index
+                    pass
+
+        return mapping
     
     # 7. Tester chaque fichier
     # Resolve threshold: Priority: CLI arg > calibrated JSON > config.py
@@ -233,6 +291,15 @@ def main():
 
     X_batch = np.stack(X_list, axis=0)
 
+    # Load metadata JSONL for this split (strict, no filename heuristics)
+    metadata_path = dataset_dir / 'augmentation_samples.jsonl'
+    metadata_map = load_metadata_jsonl(metadata_path)
+
+    # Ensure metadata exists for all files
+    missing_meta = [f for f in filenames if f not in metadata_map]
+    if missing_meta:
+        raise RuntimeError(f"Metadata manquante pour {len(missing_meta)} fichiers dans {metadata_path}: {missing_meta[:5]}{'...' if len(missing_meta)>5 else ''}")
+
     # Configure TF threading according to --workers (or default)
     num_workers = args.workers if args.workers is not None else min(max(1, multiprocessing.cpu_count() - 1), 8)
     try:
@@ -253,7 +320,21 @@ def main():
 
     for filename, true_label, prob in zip(filenames, labels_list, probs):
         pred_class = 1 if prob > resolved_threshold else 0
-        prediction_record = {'filename': filename, 'true_label': int(true_label), 'pred_label': int(pred_class), 'prob_class1': float(prob), 'subcategory': extract_subcategory(filename, true_label)}
+        meta = metadata_map.get(filename)
+        if meta is None:
+            raise RuntimeError(f"Fichier {filename} sans metadata dans {metadata_path} (aucun fallback autorisé)")
+
+        # Determine subcategory from metadata fields only (no filename heuristics)
+        subcat = meta.get('scenario') or meta.get('class_name') or 'unspecified'
+
+        prediction_record = {
+            'filename': filename,
+            'true_label': int(true_label),
+            'pred_label': int(pred_class),
+            'prob_class1': float(prob),
+            'metadata': meta,
+            'subcategory': subcat
+        }
         all_predictions.append(prediction_record)
 
         # update counts
@@ -277,7 +358,7 @@ def main():
             else:
                 class1_confusion['fn'] += 1
 
-        subcat = extract_subcategory(filename, true_label)
+        subcat = meta.get('scenario') or meta.get('class_name') or 'unspecified'
         subcategories[subcat]['label'] = true_label
         subcategories[subcat]['predictions'].append(pred_class)
         if true_label == 1 and pred_class == 1:
@@ -363,10 +444,14 @@ def main():
         print("  Par distance:")
         # Trier par distance numérique si possible
         def sort_key(x):
-            match = re.search(r'(\d+)m', x)
-            if match:
-                return int(match.group(1))
-            return 999999 if 'orig' not in x else 0
+            # Prefer numeric distances when present in the subcategory string.
+            m = re.search(r'(\d+)', str(x))
+            if m:
+                try:
+                    return int(m.group(1))
+                except Exception:
+                    pass
+            return 999999
         
         for subcat in sorted(subcat1.keys(), key=sort_key):
             m = subcat1[subcat]

@@ -27,8 +27,24 @@ def load_best_results():
     
     with open(summary_file, 'r') as f:
         data = json.load(f)
-    
-    return data.get('results', {})
+
+    results = data.get('results', {})
+    # Validation stricte: chaque entrée doit contenir les métriques attendues
+    required_metrics = ['accuracy', 'f1_score', 'precision', 'recall']
+    missing = []
+    for key, entry in results.items():
+        metrics = entry.get('metrics', {})
+        for m in required_metrics:
+            if m not in metrics:
+                missing.append(f"{key}: missing metrics.{m}")
+
+    if missing:
+        print("[ERROR] best_results_summary.json is missing required metric keys:")
+        for m in missing:
+            print(f" - {m}")
+        raise RuntimeError('best_results_summary.json missing required metrics')
+
+    return results
 
 
 def load_distance_performance():
@@ -128,11 +144,20 @@ def plot_model_comparison(best_results, output_file):
     
     # Subplot 4: Overall Performance Radar (simplifié en barres groupées)
     metrics_names = ['Accuracy', 'F1', 'Precision', 'Recall']
-    width = 0.2
-    
-    # Ensure we have enough colors
+
+    # Create a readable grouped bar chart for overall metrics.
+    # Compute a dynamic width so all models fit without overlap.
+    n_models = len(model_names)
+    group_width = 0.8
+    if n_models > 0:
+        width = group_width / max(n_models, 1)
+    else:
+        width = 0.2
+
     all_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
-    
+
+    # Center groups on each metric tick
+    x_base = np.arange(len(metrics_names))
     for i, model in enumerate(model_names):
         values = [
             np.mean(models_data[model]['accuracy']),
@@ -140,18 +165,22 @@ def plot_model_comparison(best_results, output_file):
             np.mean(models_data[model]['precision']),
             np.mean(models_data[model]['recall'])
         ]
-        x_positions = np.arange(len(metrics_names)) + i * width
-        color = all_colors[i % len(all_colors)]  # Use modulo to wrap around
-        axes[1, 1].bar(x_positions, values, width=width, label=model, 
-                      color=color, alpha=0.7, edgecolor='black')
-    
+        # center offset
+        offset = (i - (n_models - 1) / 2) * width
+        x_positions = x_base + offset
+        color = all_colors[i % len(all_colors)]
+        axes[1, 1].bar(x_positions, values, width=width * 0.95, label=model,
+                      color=color, alpha=0.9, edgecolor='black')
+
     axes[1, 1].set_ylabel('Score', fontsize=12)
     axes[1, 1].set_title('Overall Performance Metrics', fontsize=13, fontweight='bold')
-    axes[1, 1].set_xticks(np.arange(len(metrics_names)) + width * 1.5)
-    axes[1, 1].set_xticklabels(metrics_names, rotation=15, ha='right')
-    axes[1, 1].set_ylim([0, 1.05])
-    axes[1, 1].legend(loc='best', fontsize=9)
+    axes[1, 1].set_xticks(x_base)
+    axes[1, 1].set_xticklabels(metrics_names, rotation=0, ha='center')
+    axes[1, 1].set_ylim(0, 1.05)
     axes[1, 1].grid(True, alpha=0.3, axis='y')
+
+    # Place legend outside the plot to avoid occlusion
+    axes[1, 1].legend(loc='center left', bbox_to_anchor=(1.02, 0.5), fontsize=8)
     
     plt.tight_layout()
     plt.savefig(output_file, dpi=300, bbox_inches='tight')

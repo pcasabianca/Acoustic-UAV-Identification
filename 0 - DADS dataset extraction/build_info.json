@@ -1,10 +1,10 @@
 {
   "dataset_id": "0 - DADS dataset extraction",
   "generator": "augment.generator",
-  "timestamp_utc": "2026-01-18T11:38:50.345756+00:00",
-  "command": "/var/home/bazzite/Acoustic-UAV-Identification/0 - DADS dataset extraction/build_dataset_v4.py --config /var/home/bazzite/Acoustic-UAV-Identification/0 - DADS dataset extraction/build_config.json --out-dir /var/home/bazzite/Acoustic-UAV-Identification/0 - DADS dataset extraction --total-samples 1000 --num-workers 10",
+  "timestamp_utc": "2026-01-19T09:23:50.846860+00:00",
+  "command": "/var/home/bazzite/Acoustic-UAV-Identification/0 - DADS dataset extraction/build_dataset_v4.py --config /var/home/bazzite/Acoustic-UAV-Identification/0 - DADS dataset extraction/build_config.json --out-dir /var/home/bazzite/Acoustic-UAV-Identification/0 - DADS dataset extraction --total-samples 1000 --num-workers 8",
   "git_sha": null,
-  "sha256_build_config": "7aa74a24b46a665e0799a237cab87911d2a29688b4b18ccb70c26e2be40d578a",
+  "sha256_build_config": "8ae7ffc72ba57b4acbbac1cb557f6b78fcca231c15d720244c87c763b432cdf7",
   "return_code": 0,
   "totals_requested": {
     "total_samples": 1000

@@ -100,7 +100,7 @@
   "distance": { "ref_m": 1.0, "alpha": 1.0 },
 
   "output": {
-    "total_samples": 40,
+    "total_samples": 1000,
     "split_ratio": [0.7, 0.15, 0.15],
     "info_filename": "augmentation_samples.jsonl"
   }

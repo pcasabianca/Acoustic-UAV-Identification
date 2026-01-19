@@ -13,6 +13,7 @@ Features:
 import sys
 from pathlib import Path
 import shutil
+import json
 import librosa
 import librosa.display
 import matplotlib.pyplot as plt
@@ -34,57 +35,63 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 def find_example_files():
     """
-    Trouve des fichiers exemples représentatifs dans le dataset de test.
-    Retourne dict avec catégories clés.
+    Trouve des fichiers exemples représentatifs en utilisant les fichiers de
+    performance (predictions[].metadata.raw_meta.filename).
+    Retourne dict avec catégories réduites (strictement basées sur metadata disponibles).
     """
-    test_dir = config.DATASET_TEST_DIR
-    
+    perf_dir = Path(config.PERFORMANCE_DIR)
     examples = {
-        'drone_close': [],      # 100m, 200m
-        'drone_medium': [],     # 350m, 500m
-        'drone_far': [],        # 600m, 700m, 850m, 1000m
-        'drone_original': [],   # dads_1_*.wav
-        'ambient_complex': [],
-        'ambient_extreme': [],
-        'ambient_moderate': [],
-        'ambient_very': [],
-        'ambient_original': []  # dads_0_*.wav
+        'drone_original': [],
+        'ambient_original': [],
+        'drone': [],
+        'no_drone': []
     }
-    
-    if not test_dir.exists():
-        print(f"[ERROR] Test directory not found: {test_dir}")
+
+    if not perf_dir.exists():
+        print(f"[ERROR] Performance directory not found: {perf_dir}")
         return examples
-    
-    # Parcourir class 0 et class 1
-    for class_dir in [test_dir / '0', test_dir / '1']:
-        if not class_dir.exists():
+
+    # Parcourir tous les fichiers de performance et collecter les fichiers audio
+    for j in perf_dir.glob('*.json'):
+        try:
+            with open(j, 'r') as f:
+                data = json.load(f)
+        except Exception:
             continue
-        
-        for wav_file in class_dir.glob('*.wav'):
-            fname = wav_file.name.lower()
-            
-            # Drones
-            if '100m' in fname or '200m' in fname:
-                examples['drone_close'].append(wav_file)
-            elif '350m' in fname or '500m' in fname:
-                examples['drone_medium'].append(wav_file)
-            elif '600m' in fname or '700m' in fname or '850m' in fname or '1000m' in fname:
-                examples['drone_far'].append(wav_file)
-            elif 'dads_1_' in fname:
-                examples['drone_original'].append(wav_file)
-            
-            # Ambients
-            elif 'ambient_complex' in fname or 'ambient complex' in fname:
-                examples['ambient_complex'].append(wav_file)
-            elif 'ambient_extreme' in fname or 'ambient extreme' in fname:
-                examples['ambient_extreme'].append(wav_file)
-            elif 'ambient_moderate' in fname or 'ambient moderate' in fname:
-                examples['ambient_moderate'].append(wav_file)
-            elif 'ambient_very' in fname or 'ambient very' in fname:
-                examples['ambient_very'].append(wav_file)
-            elif 'dads_0_' in fname:
-                examples['ambient_original'].append(wav_file)
-    
+
+        for p in data.get('predictions', []):
+            meta = p.get('metadata', {})
+            raw_meta = meta.get('raw_meta', {})
+            raw_debug = meta.get('raw_debug', {})
+            rel_fname = raw_meta.get('filename') or p.get('filename')
+            if not rel_fname:
+                continue
+
+            # Construire le chemin absolu attendu sous DATASET_TEST_DIR
+            audio_path = config.DATASET_TEST_DIR / rel_fname
+            if not audio_path.exists():
+                # essayer sans le préfixe '0/' ou '1/' si présent
+                alt = Path(rel_fname).name
+                alt_path = config.DATASET_TEST_DIR / alt
+                if alt_path.exists():
+                    audio_path = alt_path
+                else:
+                    continue
+
+            # Catégories disponibles à partir des metadata observées
+            offline_src = raw_debug.get('offline_source', '') or ''
+            if offline_src.startswith('dads_1_'):
+                examples['drone_original'].append(audio_path)
+            elif offline_src.startswith('dads_0_'):
+                examples['ambient_original'].append(audio_path)
+
+            # Classe principale
+            class_name = meta.get('class_name') or raw_meta.get('class_name')
+            if class_name == 'no_drone' or class_name == 0:
+                examples['no_drone'].append(audio_path)
+            elif class_name == 'drone' or class_name == 1:
+                examples['drone'].append(audio_path)
+
     return examples
 
 
@@ -256,12 +263,12 @@ def main():
         if not files:
             print(f"  ⚠ No files found for {category}")
             continue
-        
+
         # Prendre 1-2 exemples aléatoires
         n_samples = min(2, len(files))
         selected = random.sample(files, n_samples)
-        selected_files[category] = []
-        
+        selected_files[category] = selected
+
         print(f"  ✓ {category}: {len(files)} files, selected {n_samples}")
         total_selected += n_samples
     
@@ -272,14 +279,18 @@ def main():
     print(f"\n[2/4] Generating visualizations for {total_selected} files...")
     
     # Générer visualisations et copier fichiers audio
+    processed = {k: [] for k in selected_files.keys()}
     for category, files in selected_files.items():
-        for audio_path in examples[category][:2]:  # Max 2 par catégorie
+        for audio_path in files:
             vis_success = generate_visualizations(audio_path, OUTPUT_DIR)
             if vis_success:
                 audio_filename = copy_audio_file(audio_path, OUTPUT_DIR)
                 vis_filename = f'{audio_path.stem}_visualization.png'
-                selected_files[category].append((audio_filename, vis_filename))
+                processed[category].append((audio_filename, vis_filename))
                 print(f"  ✓ Processed: {audio_path.name}")
+
+    # Replace selected_files with processed mapping for HTML generation
+    selected_files = processed
     
     print(f"\n[3/4] Generating HTML page...")
     generate_html_page(selected_files, OUTPUT_DIR)

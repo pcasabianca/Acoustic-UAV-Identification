@@ -128,8 +128,51 @@ def cleanup_directories(script_dir, dry_run=False):
                 print(f"  Would delete: {dir_path}")
             else:
                 print(f"  Deleting: {dir_path}")
-                shutil.rmtree(dir_path)
-                print_success(f"Cleaned {dir_name}/")
+                # Use a robust removal with an onerror handler to attempt
+                # to clear stubborn files/dirs (permissions, transient mounts,
+                # or race conditions). If removal ultimately fails, warn
+                # and continue so the pipeline can report and recover.
+                def _on_rm_error(func, path, exc_info):
+                    try:
+                        import stat
+                        os.chmod(path, stat.S_IWRITE)
+                    except Exception:
+                        pass
+                    try:
+                        if os.path.isdir(path) and not os.path.islink(path):
+                            # Try to remove contents manually
+                            for root, dirs, files in os.walk(path, topdown=False):
+                                for name in files:
+                                    try:
+                                        os.remove(os.path.join(root, name))
+                                    except Exception:
+                                        pass
+                                for name in dirs:
+                                    try:
+                                        os.rmdir(os.path.join(root, name))
+                                    except Exception:
+                                        pass
+                            try:
+                                os.rmdir(path)
+                            except Exception:
+                                pass
+                        else:
+                            try:
+                                os.remove(path)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+                try:
+                    shutil.rmtree(dir_path, onerror=_on_rm_error)
+                    # Final check
+                    if dir_path.exists():
+                        print_warning(f"  Unexpected error: could not fully remove {dir_path}")
+                    else:
+                        print_success(f"Cleaned {dir_name}/")
+                except Exception as e:
+                    print_warning(f"  Unexpected error: {e}")
         else:
             print(f"  {dir_name}/ not found (skip)")
     
@@ -488,11 +531,34 @@ Examples:
     
     # Step 2: Augmentation
     if not args.skip_augmentation:
-        # decide total samples (mid-scale override if requested)
-        if args.mid_scale and args.augment_samples is None:
-            augment_total = min(2000, int(config.DATASET_TARGET_SIZE))
+        # decide total samples (priority order):
+        # 1) CLI `--augment-samples` if provided
+        # 2) `output.total_samples` in augmentation config (build_config.json)
+        # 3) `config.DATASET_TARGET_SIZE` as a final fallback
+        # For `--mid-scale` mode we keep the previous behaviour of capping at 2000.
+        try:
+            cfg_candidate = Path(args.config)
+            cfg_path = cfg_candidate if cfg_candidate.is_absolute() else script_dir / args.config
+            total_from_cfg = None
+            if cfg_path.exists():
+                try:
+                    cfg_json = json.loads(cfg_path.read_text(encoding='utf-8'))
+                    total_from_cfg = cfg_json.get('output', {}).get('total_samples')
+                    if total_from_cfg is not None:
+                        total_from_cfg = int(total_from_cfg)
+                except Exception:
+                    total_from_cfg = None
+        except Exception:
+            total_from_cfg = None
+
+        if args.augment_samples is not None:
+            augment_total = int(args.augment_samples)
         else:
-            augment_total = args.augment_samples if args.augment_samples is not None else int(config.DATASET_TARGET_SIZE)
+            base_total = total_from_cfg if total_from_cfg is not None else int(config.DATASET_TARGET_SIZE)
+            if args.mid_scale:
+                augment_total = min(2000, int(base_total))
+            else:
+                augment_total = int(base_total)
 
         success = step_2_augment(script_dir, args.config, args.dry_run, total_samples=augment_total, num_workers=args.augment_workers, augment_dry_run=args.augment_dry_run)
         steps_success.append(('Augmentation', success))

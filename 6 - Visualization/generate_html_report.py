@@ -56,6 +56,36 @@ def generate_html_report(output_file):
     if not best_results:
         print("[ERROR] No best results found! Ensure canonical performance JSONs exist in config.PERFORMANCE_DIR and rerun visualizations.")
         return
+
+    # Validation stricte: chaque entrée du résumé doit correspondre à un fichier de performance contenant les clés minimales
+    perf_dir = config.PERFORMANCE_DIR
+    missing = []
+    for key, entry in best_results.get('results', {}).items():
+        model = entry.get('model')
+        split = entry.get('split')
+        if not model or not split:
+            missing.append(f"summary entry {key} missing model/split")
+            continue
+        pf = perf_dir / f"{model.lower()}_{split}.json"
+        if not pf.exists():
+            missing.append(f"missing perf file: {pf}")
+            continue
+        try:
+            with open(pf, 'r') as f:
+                data = json.load(f)
+        except Exception as e:
+            missing.append(f"invalid json {pf}: {e}")
+            continue
+
+        for tk in ('metadata', 'global_metrics', 'class_metrics', 'predictions'):
+            if tk not in data:
+                missing.append(f"{pf}: missing top-level key '{tk}'")
+
+    if missing:
+        print("[ERROR] Validation failed for HTML report inputs:")
+        for m in missing:
+            print(f" - {m}")
+        raise RuntimeError('generate_html_report: missing or invalid performance inputs')
     
     # Préparer les dossiers de sortie
     output_dir = Path(output_file).parent

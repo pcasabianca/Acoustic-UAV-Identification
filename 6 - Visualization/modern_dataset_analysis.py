@@ -1,5 +1,5 @@
 """
-Modern Dataset Analysis
+Modern Dataset Analysis (strict)
 Analyse la composition et les statistiques du dataset à partir de config.py.
 
 Features:
@@ -44,55 +44,98 @@ def analyze_split(split_dir, split_name):
         'files_by_class': {'0': [], '1': []}
     }
     
-    if not split_dir.exists():
-        print(f"  ⚠ Split directory not found: {split_dir}")
-        return stats
-    
-    # Analyser class 0 et class 1
-    for class_label in ['0', '1']:
-        class_dir = split_dir / class_label
-        if not class_dir.exists():
+    # For strict analysis we read canonical performance JSONs and aggregate from their
+    # per-file metadata. No filename heuristics or directory fallbacks are used.
+    perf_dir = Path(config.PERFORMANCE_DIR)
+    if not perf_dir.exists():
+        raise RuntimeError(f"Performance directory not found: {perf_dir}")
+
+    # Aggregate counts per split using the raw_meta.split value (must be present).
+    # Use deduplication by filename so that multiple performance JSONs (one per model)
+    # do not multiply counts. We count each source file only once per split.
+    counts_by_split = defaultdict(lambda: {'total': 0, 'class_0': 0, 'class_1': 0, 'subcategories': defaultdict(int)})
+    seen_files = defaultdict(set)
+
+    missing_meta_examples = []
+
+    for j in perf_dir.glob('*.json'):
+        try:
+            with open(j, 'r') as f:
+                data = json.load(f)
+        except Exception:
             continue
-        
-        wav_files = list(class_dir.glob('*.wav'))
-        stats['files_by_class'][class_label] = wav_files
-        
-        if class_label == '0':
-            stats['class_0'] = len(wav_files)
-        else:
-            stats['class_1'] = len(wav_files)
-        
-        stats['total'] += len(wav_files)
-        
-        # Analyser les sous-catégories
-        for wav_file in wav_files:
-            fname = wav_file.name.lower()
-            
-            # Catégoriser
-            if 'dads_0_' in fname:
-                stats['subcategories']['orig_ambient'] += 1
-            elif 'dads_1_' in fname:
-                stats['subcategories']['orig_drone'] += 1
-            elif 'ambient' in fname:
-                # Extraire type d'ambient
-                if 'complex' in fname:
-                    stats['subcategories']['ambient_complex'] += 1
-                elif 'extreme' in fname:
-                    stats['subcategories']['ambient_extreme'] += 1
-                elif 'moderate' in fname:
-                    stats['subcategories']['ambient_moderate'] += 1
-                elif 'very' in fname:
-                    stats['subcategories']['ambient_very'] += 1
-                else:
-                    stats['subcategories']['ambient_other'] += 1
+
+        for p in data.get('predictions', []):
+            meta = p.get('metadata')
+            if not meta or not isinstance(meta, dict):
+                missing_meta_examples.append({'file': j.name, 'prediction': p.get('filename', '<no-fname>')})
+                continue
+
+            raw_meta = meta.get('raw_meta')
+
+            # Strict requirements: require raw_meta with filename/label/split.
+            # Do NOT require raw_debug here; the heatmap code does not enforce it and
+            # scenarios should be derived from raw_meta only.
+            if not raw_meta or 'filename' not in raw_meta or 'label' not in raw_meta or 'split' not in raw_meta:
+                missing_meta_examples.append({'file': j.name, 'prediction': raw_meta.get('filename') if raw_meta else '<no-raw_meta>'})
+                continue
+
+            split_val = raw_meta['split']
+            fname = raw_meta.get('filename')
+            # Deduplicate by filename within this split
+            if fname in seen_files[split_val]:
+                continue
+            seen_files[split_val].add(fname)
+
+            counts_by_split[split_val]['total'] += 1
+            class_name = raw_meta.get('class_name') or str(raw_meta.get('label'))
+            if class_name in ('no_drone', 'class_0', 0, '0'):
+                counts_by_split[split_val]['class_0'] += 1
+            elif class_name in ('drone', 'class_1', 1, '1'):
+                counts_by_split[split_val]['class_1'] += 1
             else:
-                # Extraire distance pour les drones
-                match = re.search(r'(\d+)m', fname)
-                if match:
-                    distance = match.group(1)
-                    stats['subcategories'][f'drone_{distance}m'] += 1
-                else:
-                    stats['subcategories']['other'] += 1
+                # Count based on label value as fallback
+                try:
+                    if int(raw_meta.get('label')) == 0:
+                        counts_by_split[split_val]['class_0'] += 1
+                    else:
+                        counts_by_split[split_val]['class_1'] += 1
+                except Exception:
+                    missing_meta_examples.append({'file': j.name, 'prediction': raw_meta.get('filename')})
+                    continue
+
+            # Use canonical scenario name from raw_meta.scenario. Fail if missing.
+            scenario = raw_meta.get('scenario')
+            if not scenario:
+                missing_meta_examples.append({'file': j.name, 'prediction': raw_meta.get('filename'), 'reason': 'missing scenario in raw_meta'})
+            else:
+                counts_by_split[split_val]['subcategories'][scenario] += 1
+
+    if missing_meta_examples:
+        msg = 'Missing or incomplete per-file metadata in performance JSONs.\nShow examples: '
+        msg += ', '.join([f"{e.get('file')}@{e.get('prediction')}" for e in missing_meta_examples[:10]])
+        raise RuntimeError(msg)
+
+    # Convert counts_by_split into the stats structure expected by plotting code
+    # Use canonical split names from keys (no fallback mapping)
+    stats_list = []
+    for split_key, v in counts_by_split.items():
+        s = {
+            'split': split_key,
+            'total': v['total'],
+            'class_0': v['class_0'],
+            'class_1': v['class_1'],
+            'subcategories': v['subcategories'],
+            'files_by_class': {'0': [], '1': []}
+        }
+        stats_list.append(s)
+
+    # Return aggregated stats for the requested split_name if present
+    for s in stats_list:
+        if s['split'] == split_name or s['split'].endswith(split_name):
+            return s
+    # If no exact match, return an empty stats (caller will handle)
+    return {'split': split_name, 'total': 0, 'class_0': 0, 'class_1': 0, 'subcategories': defaultdict(int), 'files_by_class': {'0': [], '1': []}}
     
     return stats
 
@@ -141,41 +184,173 @@ def plot_subcategory_distribution(all_stats, output_dir):
     """
     Plot la distribution des sous-catégories pour le split de test.
     """
-    # Utiliser les stats du test split
-    test_stats = next((s for s in all_stats if s['split'] == 'test'), None)
-    if not test_stats or not test_stats['subcategories']:
-        print("  ⚠ No test split subcategories to plot")
+    # Rebuild subcategory counts directly from performance JSONs for the TEST split
+    # to ensure we use the exact same `scenario` extraction and deduplication
+    # logic as the heatmap.
+    # To exactly match the heatmap ordering and scenario discovery we load the
+    # same best-results set used by the heatmap and derive scenarios from it.
+    try:
+        from . import performance_comparison_best as pcb
+    except Exception:
+        try:
+            import performance_comparison_best as pcb
+        except Exception:
+            print("  ⚠ Could not import performance_comparison_best; skipping subcategory plots")
+            return
+
+    results = pcb.load_best_results()
+    if not results:
+        print("  ⚠ No best results available; skipping subcategory plots")
         return
-    
-    # Séparer drones et ambients
+
+    # Collect canonical scenario set from ALL splits (train/val/test), using the
+    # same strict rules as the heatmap: fail-fast on any missing `scenario`.
+    scenario_set = set()
+    missing_scenarios = []
+    for data in results.values():
+        for p in data.get('predictions', []):
+            raw_meta = p.get('metadata', {}).get('raw_meta', {})
+            if not isinstance(raw_meta, dict):
+                missing_scenarios.append(p.get('filename', '<no-fname>'))
+                continue
+            sc = raw_meta.get('scenario')
+            if sc:
+                scenario_set.add(sc)
+            else:
+                missing_scenarios.append(raw_meta.get('filename', '<no-fname>'))
+
+    if missing_scenarios:
+        examples = list(dict.fromkeys(missing_scenarios))[:12]
+        raise RuntimeError(
+            "Missing 'scenario' in prediction metadata.raw_meta for some predictions. "
+            "Ensure augmentation JSONL and performance JSONs include raw_meta.scenario. "
+            "Examples: " + ", ".join(examples)
+        )
+
+    # Create ordered subcategories exactly like the heatmap
+    all_subcats = sorted(list(scenario_set))
+    def extract_distance(cat_name):
+        match = re.search(r'(\d+)m', cat_name)
+        return int(match.group(1)) if match else None
+    distances = [s for s in all_subcats if extract_distance(s) is not None]
+    others = [s for s in all_subcats if extract_distance(s) is None]
+    distances_sorted = sorted(distances, key=lambda x: extract_distance(x), reverse=True)
+    ordered_subcats = distances_sorted + sorted(others)
+
+    # Rebuild counts by iterating all predictions (all splits) and deduplicating filenames globally
+    seen = set()
+    subcat_counts = defaultdict(int)
+    for data in results.values():
+        for p in data.get('predictions', []):
+            raw_meta = p.get('metadata', {}).get('raw_meta', {})
+            if not isinstance(raw_meta, dict):
+                continue
+            fname = raw_meta.get('filename') or p.get('filename')
+            if not fname or fname in seen:
+                continue
+            seen.add(fname)
+            sc = raw_meta.get('scenario')
+            if not sc:
+                # Should not happen due to earlier validation
+                raise RuntimeError(f"Missing scenario for file {fname} in best_results")
+            subcat_counts[sc] += 1
+
+    # Build ordered list of scenarios using the exact same sorting as the heatmap
+    all_subcats = sorted(list(subcat_counts.keys()))
+
+    def extract_distance(cat_name):
+        match = re.search(r'(\d+)m', cat_name)
+        return int(match.group(1)) if match else None
+
+    distances = [s for s in all_subcats if extract_distance(s) is not None]
+    others = [s for s in all_subcats if extract_distance(s) is None]
+    distances_sorted = sorted(distances, key=lambda x: extract_distance(x), reverse=True)
+    ordered_subcats = distances_sorted + sorted(others)
+
+    # Determine whether each scenario is 'drone' or 'ambient' strictly from
+    # the per-file class labels (no hardcoded name checks). We aggregate class
+    # labels across all predictions (deduplicated by filename) and decide per
+    # scenario by majority vote. Fail-fast on ties or missing labels.
+    scenario_class_counts = {s: {'class_0': 0, 'class_1': 0} for s in ordered_subcats}
+    seen_files = set()
+
+    for data in results.values():
+        for p in data.get('predictions', []):
+            raw_meta = p.get('metadata', {}).get('raw_meta', {})
+            if not isinstance(raw_meta, dict):
+                continue
+            fname = raw_meta.get('filename') or p.get('filename')
+            if not fname or fname in seen_files:
+                continue
+            seen_files.add(fname)
+            sc = raw_meta.get('scenario')
+            if sc not in scenario_class_counts:
+                # scenario outside the canonical set (shouldn't happen)
+                continue
+            # Determine class from metadata
+            cls = raw_meta.get('class_name') if 'class_name' in raw_meta else raw_meta.get('label')
+            if cls is None:
+                raise RuntimeError(f"Missing class label for file {fname}")
+            # Normalize
+            if isinstance(cls, str):
+                cls_norm = cls.lower()
+                if cls_norm in ('no_drone', 'class_0', '0', 'ambient'):
+                    scenario_class_counts[sc]['class_0'] += 1
+                elif cls_norm in ('drone', 'class_1', '1'):
+                    scenario_class_counts[sc]['class_1'] += 1
+                else:
+                    raise RuntimeError(f"Unrecognized class label '{cls}' for file {fname}")
+            else:
+                try:
+                    if int(cls) == 0:
+                        scenario_class_counts[sc]['class_0'] += 1
+                    else:
+                        scenario_class_counts[sc]['class_1'] += 1
+                except Exception:
+                    raise RuntimeError(f"Unrecognized class label '{cls}' for file {fname}")
+
+    # Now split scenarios by majority class (strict)
     drone_cats = {}
     ambient_cats = {}
-    
-    for cat, count in test_stats['subcategories'].items():
-        if 'drone' in cat:
-            drone_cats[cat] = count
+    ties = []
+    for s in ordered_subcats:
+        c0 = scenario_class_counts[s]['class_0']
+        c1 = scenario_class_counts[s]['class_1']
+        if c1 > c0:
+            drone_cats[s] = subcat_counts[s]
+        elif c0 > c1:
+            ambient_cats[s] = subcat_counts[s]
         else:
-            ambient_cats[cat] = count
+            ties.append((s, c0, c1))
+
+    if ties:
+        examples = ', '.join([f"{t[0]}({t[1]} vs {t[2]})" for t in ties[:10]])
+        raise RuntimeError(f"Tie or no class majority for scenarios: {examples}. Fix labels before plotting.")
     
     # Plot drones
     if drone_cats:
         fig, ax = plt.subplots(figsize=(14, 6))
         
-        # Trier par distance
+        # Trier par distance using the same pattern as the heatmap: look for '<number>m'
         def extract_dist(cat_name):
             if 'orig' in cat_name:
                 return 0
-            match = re.search(r'(\d+)', cat_name)
-            return int(match.group(1)) if match else 999
-        
-        sorted_cats = sorted(drone_cats.items(), key=lambda x: extract_dist(x[0]))
+            match = re.search(r'(\d+)m', cat_name)
+            return int(match.group(1)) if match else None
+
+        # Sort distances descending, others after
+        distances = [s for s in drone_cats.keys() if extract_dist(s) is not None]
+        others = [s for s in drone_cats.keys() if extract_dist(s) is None]
+        distances_sorted = sorted(distances, key=lambda x: extract_dist(x), reverse=True)
+        ordered = distances_sorted + sorted(others)
+        sorted_cats = [(k, drone_cats[k]) for k in ordered]
         labels = [cat.replace('_', ' ').title() for cat, _ in sorted_cats]
         values = [count for _, count in sorted_cats]
         
         bars = ax.bar(range(len(labels)), values, color='#e74c3c', alpha=0.7, edgecolor='black')
         ax.set_xlabel('Drone Category', fontweight='bold', fontsize=12)
         ax.set_ylabel('Number of Samples', fontweight='bold', fontsize=12)
-        ax.set_title('Drone Distribution by Distance (Test Set)', fontweight='bold', fontsize=14)
+        ax.set_title('Drone Distribution by Distance (All Splits)', fontweight='bold', fontsize=14)
         ax.set_xticks(range(len(labels)))
         ax.set_xticklabels(labels, rotation=45, ha='right')
         ax.grid(axis='y', alpha=0.3)
@@ -194,7 +369,7 @@ def plot_subcategory_distribution(all_stats, output_dir):
     # Plot ambients
     if ambient_cats:
         fig, ax = plt.subplots(figsize=(12, 6))
-        
+        # Keep alphabetical order for ambients but normalize label formatting
         sorted_cats = sorted(ambient_cats.items())
         labels = [cat.replace('_', ' ').title() for cat, _ in sorted_cats]
         values = [count for _, count in sorted_cats]
@@ -202,7 +377,7 @@ def plot_subcategory_distribution(all_stats, output_dir):
         bars = ax.bar(range(len(labels)), values, color='#3498db', alpha=0.7, edgecolor='black')
         ax.set_xlabel('Ambient Category', fontweight='bold', fontsize=12)
         ax.set_ylabel('Number of Samples', fontweight='bold', fontsize=12)
-        ax.set_title('Ambient Distribution by Type (Test Set)', fontweight='bold', fontsize=14)
+        ax.set_title('Ambient Distribution by Type (All Splits)', fontweight='bold', fontsize=14)
         ax.set_xticks(range(len(labels)))
         ax.set_xticklabels(labels, rotation=45, ha='right')
         ax.grid(axis='y', alpha=0.3)

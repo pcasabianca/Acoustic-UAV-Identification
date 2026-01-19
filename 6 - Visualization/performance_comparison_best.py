@@ -59,6 +59,12 @@ def load_best_results():
             with open(json_file, 'r') as f:
                 full_data = json.load(f)
 
+            # Validate minimal structure of the loaded performance file
+            for tk in ('metadata', 'global_metrics', 'class_metrics', 'predictions'):
+                if tk not in full_data:
+                    print(f"  ✗ {json_file.name} missing key: {tk}")
+                    raise RuntimeError(f"Invalid performance file: {json_file.name}")
+
             # Prefer threshold found in file metadata; fall back to summary threshold
             file_threshold = full_data.get('metadata', {}).get('threshold', threshold)
             key_tuple = (model, split, file_threshold)
@@ -201,10 +207,19 @@ def plot_class_performance(results, output_dir):
         key = [k for k in test_results.keys() if k[0] == model][0]
         data = test_results[key]
         class_metrics = data.get('class_metrics', {})
-        
-        drone_metrics = class_metrics.get('drone', {})
-        ambient_metrics = class_metrics.get('ambient', {})
-        
+
+        # Require explicit class metrics naming. Accept either ('drone','ambient')
+        # or ('class_1','class_0') but do NOT fallback to arbitrary keys.
+        if 'drone' in class_metrics and 'ambient' in class_metrics:
+            drone_metrics = class_metrics.get('drone', {})
+            ambient_metrics = class_metrics.get('ambient', {})
+        elif 'class_1' in class_metrics and 'class_0' in class_metrics:
+            # Map class_1 -> drone, class_0 -> ambient (based on training conventions)
+            drone_metrics = class_metrics.get('class_1', {})
+            ambient_metrics = class_metrics.get('class_0', {})
+        else:
+            raise RuntimeError(f"class_metrics missing required keys ('drone'/'ambient' or 'class_1'/'class_0') for model {model}")
+
         drone_acc.append(drone_metrics.get('accuracy', 0))
         ambient_acc.append(ambient_metrics.get('accuracy', 0))
         drone_f1.append(drone_metrics.get('f1_score', 0))
@@ -251,61 +266,106 @@ def plot_subcategory_heatmap(results, output_dir):
     if not test_results:
         return
     
-    # Collecter toutes les sous-catégories
-    all_subcats = set()
+    # Require explicit `scenario` in each prediction's canonical raw_meta.
+    scenario_set = set()
+    missing = []
     for data in test_results.values():
-        all_subcats.update(data.get('subcategory_metrics', {}).keys())
+        for p in data.get('predictions', []):
+            raw_meta = p.get('metadata', {}).get('raw_meta', {})
+            sc = raw_meta.get('scenario') if isinstance(raw_meta, dict) else None
+            if not sc:
+                missing.append(p.get('filename', '<no-fname>'))
+            else:
+                scenario_set.add(sc)
+
+    if missing:
+        examples = list(dict.fromkeys(missing))[:12]
+        raise RuntimeError(
+            "Missing 'scenario' in prediction metadata.raw_meta for some predictions. "
+            "Ensure augmentation JSONL and performance JSONs include raw_meta.scenario. "
+            "Examples: " + ", ".join(examples)
+        )
+
+    # Build matrix aggregated by scenario
+    all_subcats = sorted(list(scenario_set))
     
-    if not all_subcats:
-        print("  [SKIP] No subcategory metrics found")
-        return
-    
-    # ORDRE LOGIQUE: distances décroissantes (tri numérique), puis orig_drone, puis ambients, puis orig_none
-    # Séparer les catégories
-    distances = []
-    orig_drone = []
-    ambients = []
-    orig_none = []
-    
-    for s in all_subcats:
-        if 'orig_drone' in s:
-            orig_drone.append(s)
-        elif 'orig_none' in s:
-            orig_none.append(s)
-        elif 'ambient' in s:
-            ambients.append(s)
-        else:
-            # Extraire la distance (ex: "850m" de "850m" ou de "drone_850m")
-            distances.append(s)
-    
-    # Trier les distances par valeur numérique DÉCROISSANTE (1000m avant 850m avant 100m)
+    # If scenarios look like distances (e.g. '850m'), try to sort numerically descending.
     import re
     def extract_distance(s):
         match = re.search(r'(\d+)m', s)
-        return int(match.group(1)) if match else 0
-    
-    distances_sorted = sorted(distances, key=extract_distance, reverse=True)
-    
-    # Ordre final: distances (loin → près), orig_drone, ambients, orig_none
-    all_subcats = distances_sorted + sorted(orig_drone) + sorted(ambients) + sorted(orig_none)
+        return int(match.group(1)) if match else None
+
+    # Sort scenarios: numeric distances first (desc), then alphabetical
+    distances = [s for s in all_subcats if extract_distance(s) is not None]
+    others = [s for s in all_subcats if extract_distance(s) is None]
+    distances_sorted = sorted(distances, key=lambda x: extract_distance(x), reverse=True)
+    all_subcats = distances_sorted + sorted(others)
     
     models = sorted([k[0] for k in test_results.keys()])
     
-    # Créer la matrice de données
-    accuracy_matrix = np.zeros((len(models), len(all_subcats)))
-    
+    # Build accuracy matrix. If using scenarios, aggregate per-scenario from predictions.
+    accuracy_matrix = np.full((len(models), len(all_subcats)), np.nan)
+
     for i, model in enumerate(models):
         key = [k for k in test_results.keys() if k[0] == model][0]
         data = test_results[key]
-        subcat_metrics = data.get('subcategory_metrics', {})
-        
+
+        # Aggregate by scenario from predictions using `raw_meta.scenario` (strict)
+        counts = {s: {'correct': 0, 'total': 0} for s in all_subcats}
+        for p in data.get('predictions', []):
+            raw_meta = p.get('metadata', {}).get('raw_meta', {})
+            sc = raw_meta.get('scenario') if isinstance(raw_meta, dict) else None
+            if sc in counts:
+                counts[sc]['total'] += 1
+                if p.get('true_label') == p.get('pred_label'):
+                    counts[sc]['correct'] += 1
+
         for j, subcat in enumerate(all_subcats):
-            if subcat in subcat_metrics:
-                accuracy_matrix[i, j] = subcat_metrics[subcat].get('accuracy', 0)
+            cnt = counts.get(subcat, {})
+            if cnt.get('total', 0) > 0:
+                accuracy_matrix[i, j] = cnt['correct'] / cnt['total']
             else:
                 accuracy_matrix[i, j] = np.nan
     
     # Plot
+    # Also compute mean resulting SNR per scenario (deduplicated by filename)
+    # and attach it to x tick labels.
+    scenario_snrs = {s: [] for s in all_subcats}
+    seen_files = set()
+    missing_snr = []
+    for data in test_results.values():
+        for p in data.get('predictions', []):
+            raw_meta = p.get('metadata', {}).get('raw_meta', {})
+            raw_debug = p.get('metadata', {}).get('raw_debug', {})
+            if not isinstance(raw_meta, dict):
+                continue
+            fname = raw_meta.get('filename') or p.get('filename')
+            if not fname or fname in seen_files:
+                continue
+            seen_files.add(fname)
+            sc = raw_meta.get('scenario')
+            if sc not in scenario_snrs:
+                continue
+            # Require resulting_snr_db to be present
+            if not isinstance(raw_debug, dict) or 'resulting_snr_db' not in raw_debug:
+                missing_snr.append(fname)
+                continue
+            try:
+                snr_val = float(raw_debug.get('resulting_snr_db'))
+            except Exception:
+                missing_snr.append(fname)
+                continue
+            scenario_snrs[sc].append(snr_val)
+
+    if missing_snr:
+        examples = list(dict.fromkeys(missing_snr))[:12]
+        raise RuntimeError(
+            "Missing or invalid 'resulting_snr_db' in some prediction raw_debug entries. Examples: " + ", ".join(examples)
+        )
+
+    # Compute mean SNR per scenario
+    scenario_snr_mean = {s: (np.mean(scenario_snrs[s]) if len(scenario_snrs[s])>0 else float('nan')) for s in all_subcats}
+
     fig, ax = plt.subplots(figsize=(max(14, len(all_subcats) * 0.8), max(8, len(models) * 0.6)))
     
     # Calculer vmin/vmax dynamiquement basé sur les données réelles (ignore NaN)
@@ -313,8 +373,72 @@ def plot_subcategory_heatmap(results, output_dir):
     vmin_dynamic = valid_data.min() if len(valid_data) > 0 else 0
     vmax_dynamic = valid_data.max() if len(valid_data) > 0 else 1
     
-    sns.heatmap(accuracy_matrix, annot=True, fmt='.3f', cmap='RdYlGn', ax=ax,
-               xticklabels=all_subcats, yticklabels=models, cbar_kws={'label': 'Accuracy'},
+    # Determine scenario class (majority vote) strictly from per-file labels in test_results
+    scenario_class_counts = {s: {'class_0': 0, 'class_1': 0} for s in all_subcats}
+    seen = set()
+    for data in test_results.values():
+        for p in data.get('predictions', []):
+            raw_meta = p.get('metadata', {}).get('raw_meta', {})
+            if not isinstance(raw_meta, dict):
+                continue
+            fname = raw_meta.get('filename') or p.get('filename')
+            if not fname or fname in seen:
+                continue
+            seen.add(fname)
+            sc = raw_meta.get('scenario')
+            if sc not in scenario_class_counts:
+                continue
+            cls = raw_meta.get('class_name') if 'class_name' in raw_meta else raw_meta.get('label')
+            if cls is None:
+                raise RuntimeError(f"Missing class label for file {fname}")
+            if isinstance(cls, str):
+                cls_norm = cls.lower()
+                if cls_norm in ('no_drone', 'class_0', '0', 'ambient'):
+                    scenario_class_counts[sc]['class_0'] += 1
+                elif cls_norm in ('drone', 'class_1', '1'):
+                    scenario_class_counts[sc]['class_1'] += 1
+                else:
+                    raise RuntimeError(f"Unrecognized class label '{cls}' for file {fname}")
+            else:
+                try:
+                    if int(cls) == 0:
+                        scenario_class_counts[sc]['class_0'] += 1
+                    else:
+                        scenario_class_counts[sc]['class_1'] += 1
+                except Exception:
+                    raise RuntimeError(f"Unrecognized class label '{cls}' for file {fname}")
+
+    # Decide majority class per scenario and group
+    class0 = []
+    class1 = []
+    ties = []
+    for s in all_subcats:
+        c0 = scenario_class_counts[s]['class_0']
+        c1 = scenario_class_counts[s]['class_1']
+        if c0 > c1:
+            class0.append(s)
+        elif c1 > c0:
+            class1.append(s)
+        else:
+            ties.append((s, c0, c1))
+    if ties:
+        examples = ', '.join([f"{t[0]}({t[1]} vs {t[2]})" for t in ties[:12]])
+        raise RuntimeError(f"Tie or no majority class for scenarios: {examples}")
+
+    # Sort each group by mean SNR ascending (lower SNR -> harder)
+    class0_sorted = sorted(class0, key=lambda x: scenario_snr_mean.get(x, float('nan')))
+    class1_sorted = sorted(class1, key=lambda x: scenario_snr_mean.get(x, float('nan')))
+    ordered_all_subcats = class0_sorted + class1_sorted
+
+    # Build xtick labels that include mean SNR per scenario in the new order
+    xtick_labels = [f"{s}\n{scenario_snr_mean.get(s, float('nan')):.1f} dB" for s in ordered_all_subcats]
+
+    # Reorder accuracy_matrix columns to match ordered_all_subcats
+    col_idx = [all_subcats.index(s) for s in ordered_all_subcats]
+    accuracy_matrix_reordered = accuracy_matrix[:, col_idx]
+
+    sns.heatmap(accuracy_matrix_reordered, annot=True, fmt='.3f', cmap='RdYlGn', ax=ax,
+               xticklabels=xtick_labels, yticklabels=models, cbar_kws={'label': 'Accuracy'},
                vmin=vmin_dynamic, vmax=vmax_dynamic, linewidths=0.5, linecolor='gray')
     
     ax.set_title('Accuracy Heatmap by Subcategory (Test Set - Best Thresholds)', fontweight='bold', fontsize=14)

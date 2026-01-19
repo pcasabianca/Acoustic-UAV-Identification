@@ -18,18 +18,33 @@ def load_augmentation_metadata():
     """
     Charge les métadonnées d'augmentation pour extraire les valeurs de SNR.
     """
-    # Chercher le fichier de métadonnées d'augmentation
-    extraction_dir = Path(config.EXTRACTION_DIR)
-    metadata_file = extraction_dir / "dataset_augmented" / "augmentation_metadata.json"
-    
-    if not metadata_file.exists():
-        print(f"[WARNING] Metadata file not found: {metadata_file}")
+    # Récupère le SNR à partir des fichiers de performance générés (predictions[].metadata.raw_debug.resulting_snr_db)
+    perf_dir = Path(config.PERFORMANCE_DIR)
+    if not perf_dir.exists():
+        print(f"[ERROR] Performance directory not found: {perf_dir}")
         return None
-    
-    with open(metadata_file, 'r') as f:
-        metadata = json.load(f)
-    
-    return metadata
+
+    snr_entries = {}
+    # Parcourir tous les JSON de performance
+    for j in perf_dir.glob('*.json'):
+        try:
+            with open(j, 'r') as f:
+                data = json.load(f)
+        except Exception:
+            continue
+
+        preds = data.get('predictions', [])
+        for p in preds:
+            meta = p.get('metadata', {})
+            raw_debug = meta.get('raw_debug', {})
+            snr = raw_debug.get('resulting_snr_db')
+            # Category by subcategory if present, else class_name
+            cat = p.get('subcategory') or meta.get('class_name') or meta.get('raw_meta', {}).get('class_name', 'unknown')
+            if snr is None:
+                continue
+            snr_entries.setdefault(cat, []).append(float(snr))
+
+    return snr_entries
 
 
 def extract_snr_distribution(metadata):
@@ -177,23 +192,13 @@ def main():
     print("=" * 80)
     print()
     
-    # Charger les métadonnées
-    print("[INFO] Loading augmentation metadata...")
-    metadata = load_augmentation_metadata()
-    
-    if not metadata:
-        print("[ERROR] Could not load augmentation metadata!")
-        print("[INFO] Make sure the dataset has been augmented with metadata tracking.")
-        return
-    
-    print(f"[INFO] Found {len(metadata)} augmented files")
-    
-    # Extraire la distribution du SNR
-    print("[INFO] Extracting SNR distribution...")
-    snr_by_category = extract_snr_distribution(metadata)
-    
+    # Charger les SNR depuis les fichiers de performance
+    print("[INFO] Loading SNR values from performance JSONs...")
+    snr_by_category = load_augmentation_metadata()
+
     if not snr_by_category:
-        print("[ERROR] No SNR data found in metadata!")
+        print("[ERROR] No SNR data found in performance JSONs!")
+        print("[INFO] Ensure performance JSONs include predictions[].metadata.raw_debug.resulting_snr_db")
         return
     
     print(f"[INFO] Found SNR data for {len(snr_by_category)} categories")

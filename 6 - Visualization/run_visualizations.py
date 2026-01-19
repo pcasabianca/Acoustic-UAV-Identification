@@ -29,6 +29,7 @@ import modern_threshold_calibration
 import modern_audio_examples
 import threshold_analysis
 import generate_html_report
+import json
 
 plot_utils.set_style()
 
@@ -124,7 +125,81 @@ def main():
     steps.append((step_num, "HTML Report Generation", generate_html_report.main,
                   "Creating interactive HTML report..."))
     
-    # Execute pipeline
+    # Validate performance files before running (fail-fast)
+    print("\n[INFO] Validating performance JSON files (fail-fast)...")
+    perf_dir = config.PERFORMANCE_DIR
+    best_summary = perf_dir / 'best_results_summary.json'
+    expected_files = []
+    if best_summary.exists():
+        try:
+            with open(best_summary, 'r') as f:
+                summary = json.load(f)
+            for key, entry in summary.get('results', {}).items():
+                model = entry.get('model')
+                split = entry.get('split')
+                if model and split:
+                    expected_files.append(perf_dir / f"{model.lower()}_{split}.json")
+        except Exception as e:
+            print(f"[ERROR] Could not read best_results_summary.json: {e}")
+            return 1
+    else:
+        # Fallback: validate all json files in performance dir
+        expected_files = list(perf_dir.glob('*.json'))
+
+    def validate_perf_file(p):
+        try:
+            with open(p, 'r') as f:
+                data = json.load(f)
+        except Exception as e:
+            raise RuntimeError(f"Invalid JSON file: {p} ({e})")
+
+        # Minimal required keys
+        required_top = ['metadata', 'global_metrics', 'class_metrics', 'predictions']
+        for k in required_top:
+            if k not in data:
+                raise RuntimeError(f"Missing top-level key '{k}' in {p}")
+
+        meta = data['metadata']
+        for mk in ['model', 'split', 'threshold', 'total_samples']:
+            if mk not in meta:
+                raise RuntimeError(f"Missing metadata.{mk} in {p}")
+
+        gm = data['global_metrics']
+        if 'f1_score' not in gm and 'f1' not in gm:
+            raise RuntimeError(f"Missing global_metrics.f1_score in {p}")
+
+        cm = data['class_metrics']
+        if 'class_1' not in cm:
+            raise RuntimeError(f"Missing class_metrics.class_1 in {p}")
+
+        preds = data['predictions']
+        if not isinstance(preds, list):
+            raise RuntimeError(f"predictions should be a list in {p}")
+
+        # Check total_samples consistency
+        total = meta.get('total_samples')
+        if total is not None and len(preds) != total:
+            raise RuntimeError(f"predictions length ({len(preds)}) != metadata.total_samples ({total}) in {p}")
+
+    # Run validation
+    errors = []
+    for p in expected_files:
+        if not p.exists():
+            errors.append(f"Missing expected performance file: {p}")
+            continue
+        try:
+            validate_perf_file(p)
+        except Exception as e:
+            errors.append(str(e))
+
+    if errors:
+        print("\n[ERROR] Performance files validation failed:\n")
+        for e in errors:
+            print(f" - {e}")
+        print("\nAborting visualization pipeline. Regenerate performance JSONs with full metadata.")
+        return 1
+
+    # Execute pipeline (fail-fast on exceptions)
     success_count = 0
     failed_steps = []
     
@@ -136,11 +211,11 @@ def main():
             success_count += 1
             print(f"\n✓ {name} completed successfully")
         except Exception as e:
-            failed_steps.append(name)
             print(f"\n✗ {name} failed: {e}")
             import traceback
             traceback.print_exc()
-            print(f"\n[WARNING] Continuing with remaining steps...")
+            print("\n[ERROR] Aborting due to failure (fail-fast mode).")
+            return 1
     
     # Final summary
     print_header("VISUALIZATION PIPELINE COMPLETE")
