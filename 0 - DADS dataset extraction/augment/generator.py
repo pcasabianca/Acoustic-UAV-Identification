@@ -101,8 +101,29 @@ def process_task(task: Dict[str, Any]):
                             ambient_path = str(pick_rng.choice(pool_label))
                             ambient_audio = _load_audio_file(ambient_path, task.get('sr'))
                             if ambient_audio is not None:
-                                mix_sources.append({'audio': ambient_audio, 'gain': 1.0})
-                                ambient_debug.append({'source': Path(ambient_path).name})
+                                # sample ambient gain delta from scenario if present
+                                amb_gain_db = None
+                                try:
+                                    agr = scenario.get('ambient_spl_db_range') if isinstance(scenario, dict) else None
+                                    if isinstance(agr, (list, tuple)) and len(agr) >= 2:
+                                        low = float(agr[0]); high = float(agr[1])
+                                        amb_gain_db = float(pick_rng.uniform(low, high))
+                                except Exception:
+                                    amb_gain_db = None
+                                if amb_gain_db is None:
+                                    lin_gain = 1.0
+                                else:
+                                    # convert dB delta to linear and clamp
+                                    lin_gain = float(10.0 ** (amb_gain_db / 20.0))
+                                    max_gain_linear = float(task.get('cfg', {}).get('max_gain_linear', 50.0) if isinstance(task.get('cfg', {}), dict) else 50.0)
+                                    if lin_gain > max_gain_linear:
+                                        lin_gain = max_gain_linear
+                                mix_sources.append({'audio': ambient_audio, 'gain': lin_gain})
+                                ad = {'source': Path(ambient_path).name}
+                                if amb_gain_db is not None:
+                                    ad['ambient_spl_db_set'] = float(amb_gain_db)
+                                    ad['ambient_source_gain_db'] = float(amb_gain_db)
+                                ambient_debug.append(ad)
                         except Exception:
                             pass
             except Exception:
@@ -124,7 +145,42 @@ def process_task(task: Dict[str, Any]):
                                 continue
                             try:
                                 from .distance import apply as _distance_apply
-                                processed_drone, ddbg = _distance_apply(drone_audio, task.get('sr'), pick_rng, {}, task.get('cfg', {}))
+                                # Prepare meta for distance.apply: allow scenario to specify drone_spl_db_range
+                                local_meta = {}
+                                try:
+                                    dsr = scenario.get('drone_spl_db_range') if isinstance(scenario, dict) else None
+                                    if isinstance(dsr, (list, tuple)) and len(dsr) >= 2:
+                                        low = float(dsr[0]); high = float(dsr[1])
+                                        drone_spl_db = float(pick_rng.uniform(low, high))
+                                        local_meta['drone_spl_db'] = drone_spl_db
+                                except Exception:
+                                    pass
+                                # pass requested distance from scenario if available
+                                try:
+                                    dlist = scenario.get('drones') if isinstance(scenario, dict) else None
+                                    requested_distance = None
+                                    if isinstance(dlist, (list, tuple)) and len(dlist) > 0:
+                                        # prefer element-specific value when present
+                                        if di < len(dlist):
+                                            val = dlist[di]
+                                            if isinstance(val, (list, tuple)) and len(val) >= 2:
+                                                low = float(val[0]); high = float(val[1])
+                                                requested_distance = float(pick_rng.uniform(low, high))
+                                            else:
+                                                requested_distance = float(val)
+                                        else:
+                                            # fallback: treat list as a range if it contains two numeric entries
+                                            try:
+                                                if len(dlist) >= 2 and all(isinstance(x, (int, float)) for x in dlist):
+                                                    low = float(min(dlist)); high = float(max(dlist))
+                                                    requested_distance = float(pick_rng.uniform(low, high))
+                                            except Exception:
+                                                requested_distance = None
+                                    if requested_distance is not None:
+                                        local_meta['requested_distance_m'] = float(requested_distance)
+                                except Exception:
+                                    pass
+                                processed_drone, ddbg = _distance_apply(drone_audio, task.get('sr'), pick_rng, local_meta, task.get('cfg', {}))
                             except Exception:
                                 processed_drone = drone_audio
                                 ddbg = {}
@@ -132,6 +188,12 @@ def process_task(task: Dict[str, Any]):
                             entry = {'source': Path(drone_path).name}
                             if isinstance(ddbg, dict):
                                 entry.update(ddbg)
+                            # record sampled drone_spl_db if provided
+                            try:
+                                if isinstance(local_meta, dict) and 'drone_spl_db' in local_meta:
+                                    entry['drone_spl_db'] = float(local_meta['drone_spl_db'])
+                            except Exception:
+                                pass
                             drone_debug.append(entry)
                         except Exception:
                             continue
@@ -147,8 +209,28 @@ def process_task(task: Dict[str, Any]):
                             amb_audio = _load_audio_file(amb_path, task.get('sr'))
                             if amb_audio is None:
                                 continue
-                            mix_sources.append({'audio': amb_audio, 'gain': 1.0})
-                            ambient_debug.append({'source': Path(amb_path).name})
+                            # sample ambient gain delta from scenario if present
+                            amb_gain_db = None
+                            try:
+                                agr = scenario.get('ambient_spl_db_range') if isinstance(scenario, dict) else None
+                                if isinstance(agr, (list, tuple)) and len(agr) >= 2:
+                                    low = float(agr[0]); high = float(agr[1])
+                                    amb_gain_db = float(pick_rng.uniform(low, high))
+                            except Exception:
+                                amb_gain_db = None
+                            if amb_gain_db is None:
+                                lin_gain = 1.0
+                            else:
+                                lin_gain = float(10.0 ** (amb_gain_db / 20.0))
+                                max_gain_linear = float(task.get('cfg', {}).get('max_gain_linear', 50.0) if isinstance(task.get('cfg', {}), dict) else 50.0)
+                                if lin_gain > max_gain_linear:
+                                    lin_gain = max_gain_linear
+                            mix_sources.append({'audio': amb_audio, 'gain': lin_gain})
+                            ad = {'source': Path(amb_path).name}
+                            if amb_gain_db is not None:
+                                ad['ambient_spl_db_set'] = float(amb_gain_db)
+                                ad['ambient_source_gain_db'] = float(amb_gain_db)
+                            ambient_debug.append(ad)
                         except Exception:
                             continue
 
@@ -225,9 +307,10 @@ def process_task(task: Dict[str, Any]):
                 processed_audio += aa * g
             mix_debug = {'fallback_mix_error': str(e)}
 
-        # final normalize
+        # final normalize -- REMOVED: preserve raw post-mix levels (keeps attenuation/gains intact)
         try:
-            processed_audio, nd = _normalize_mod.apply(processed_audio, task['sr'], rng, task['train_meta'], task['cfg'])
+            # Normalization intentionally skipped to preserve applied attenuation and relative levels.
+            nd = {}
             # apply post-mix reverb if requested by scenario
             try:
                 rev_cfg = None
@@ -249,6 +332,105 @@ def process_task(task: Dict[str, Any]):
             # collate debug
             debug = {'drone_parts': drone_debug, 'ambient_parts': ambient_debug}
             debug.update(mix_debug if isinstance(mix_debug, dict) else {})
+
+            # Ensure each drone debug entry records the requested distance explicitly
+            try:
+                for d in debug.get('drone_parts', []):
+                    # prefer explicit requested_distance_m if present, else fall back to sampled distance_m
+                    rd = None
+                    try:
+                        rd = d.get('requested_distance_m', None)
+                    except Exception:
+                        rd = None
+                    if rd is None:
+                        try:
+                            rd = d.get('distance_m', None)
+                        except Exception:
+                            rd = None
+                    d['requested_distance_m'] = (float(rd) if rd is not None else None)
+            except Exception:
+                pass
+
+            # Summarize applied augmentations heuristically for provenance
+            try:
+                appl = []
+                # attenuation/distance
+                if any((isinstance(d, dict) and (d.get('atten_dB') is not None or d.get('distance_m') is not None)) for d in debug.get('drone_parts', [])):
+                    appl.append('attenuate')
+                # mixing / snr scaling
+                if isinstance(debug.get('snr_scale', None), (int, float)) or isinstance(debug.get('target_snr_db', None), (int, float)):
+                    appl.append('snr_scaling')
+                # reverb
+                if debug.get('reverb_debug') is not None:
+                    appl.append('reverb')
+                # normalization
+                if isinstance(nd, dict) and nd.get('normalized_gain') is not None:
+                    appl.append('normalize')
+                # record list (dedup)
+                debug['applied_augmentations'] = list(dict.fromkeys(appl))
+            except Exception:
+                debug['applied_augmentations'] = []
+            # compute resulting SNR (drone vs rest) when possible and attach to debug
+            try:
+                import numpy as _np, math as _math
+                # sum drone parts into one reference signal (align lengths)
+                if drone_parts:
+                    # determine target length
+                    L = int(processed_audio.size) if hasattr(processed_audio, 'size') else len(processed_audio)
+                    def _ensure_len_local(arr, L):
+                        if arr is None:
+                            return _np.zeros(L, dtype=float)
+                        a = _np.asarray(arr).astype(float)
+                        if a.size == L:
+                            return a
+                        if a.size > L:
+                            return a[:L]
+                        return _np.pad(a, (0, L - a.size))
+                    drone_sum = _np.zeros(L, dtype=float)
+                    for (darr, g) in drone_parts:
+                        try:
+                            darr_a = _ensure_len_local(darr, L)
+                            drone_sum += darr_a * float(g)
+                        except Exception:
+                            continue
+                    # compute noise as processed_audio - drone_sum
+                    proc = _ensure_len_local(processed_audio, L)
+                    # account for post-normalization gain applied to `processed_audio`
+                    try:
+                        normalized_gain = float(nd.get('normalized_gain', 1.0))
+                    except Exception:
+                        normalized_gain = 1.0
+                    # scale the drone reference by the same normalization gain
+                    try:
+                        drone_sum = drone_sum * normalized_gain
+                    except Exception:
+                        pass
+                    # indicate whether any drone parts were present for this sample
+                    try:
+                        debug['drone_present'] = len(drone_parts) > 0
+                    except Exception:
+                        debug['drone_present'] = False
+                    noise = proc - drone_sum
+                    # Only compute resulting SNR when at least one drone part was present
+                    try:
+                        drone_present = bool(debug.get('drone_present'))
+                    except Exception:
+                        drone_present = False
+                    if not drone_present:
+                        resulting_snr = None
+                    else:
+                        drone_power = float(_np.mean(drone_sum**2)) if drone_sum.size > 0 else 0.0
+                        noise_power = float(_np.mean(noise**2)) if noise.size > 0 else 0.0
+                        if noise_power <= 0 and drone_power <= 0:
+                            resulting_snr = None
+                        elif noise_power <= 0:
+                            resulting_snr = float('inf')
+                        else:
+                            resulting_snr = 10.0 * _math.log10(max(drone_power, 1e-20) / max(noise_power, 1e-20))
+                    if resulting_snr is not None:
+                        debug['resulting_snr_db'] = float(resulting_snr)
+            except Exception:
+                pass
         except Exception as e:
             debug = {'error': str(e)}
 

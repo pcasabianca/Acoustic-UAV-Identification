@@ -21,24 +21,57 @@ def apply(audio: np.ndarray, sr: int, rng, meta: dict, cfg: dict) -> Tuple[np.nd
     if audio is None:
         return audio, debug
 
-    # distance sampling
+    # distance sampling: allow per-call override via meta['requested_distance_m'] or meta['distance']
     dist_cfg = cfg.get('distance', {}) if isinstance(cfg, dict) else {}
-    dmin, dmax = 1.0, 30.0
-    if 'range_m' in dist_cfg:
-        try:
-            dmin, dmax = float(dist_cfg['range_m'][0]), float(dist_cfg['range_m'][1])
-        except Exception:
-            pass
+    if isinstance(meta, dict) and isinstance(meta.get('distance'), dict):
+        # scenario-level distance block supplied via meta
+        dist_cfg = meta.get('distance')
 
-    mode = dist_cfg.get('mode', 'linear')
-    if mode == 'log':
-        import math
-        ldmin, ldmax = math.log(dmin), math.log(dmax)
-        dist = float(np.exp(rng.uniform(ldmin, ldmax)))
-    else:
-        dist = float(rng.uniform(dmin, dmax))
+    # if caller requested an exact distance, honour it
+    dist = None
+    try:
+        if isinstance(meta, dict) and meta.get('requested_distance_m') is not None:
+            dist = float(meta.get('requested_distance_m'))
+    except Exception:
+        dist = None
+
+    if dist is None:
+        dmin, dmax = 1.0, 30.0
+        if 'range_m' in dist_cfg:
+            try:
+                dmin, dmax = float(dist_cfg['range_m'][0]), float(dist_cfg['range_m'][1])
+            except Exception:
+                pass
+
+        mode = dist_cfg.get('mode', 'linear')
+        if mode == 'log':
+            import math
+            ldmin, ldmax = math.log(dmin), math.log(dmax)
+            dist = float(np.exp(rng.uniform(ldmin, ldmax)))
+        else:
+            dist = float(rng.uniform(dmin, dmax))
 
     debug['distance_m'] = float(dist)
+
+    # If caller specified a desired drone source level (SPL at 1m), apply source-level gain
+    try:
+        # Interpret `drone_spl_db` as a delta gain in dB (relative gain), not an absolute SPL.
+        if isinstance(meta, dict) and 'drone_spl_db' in meta and audio is not None:
+            gain_db = float(meta.get('drone_spl_db'))
+            gain_linear = 10.0 ** (gain_db / 20.0)
+            # clamp excessive gains to avoid numerical explosions in uncalibrated digital domain
+            max_gain_linear = float(cfg.get('max_gain_linear', 50.0)) if isinstance(cfg, dict) else 50.0
+            if gain_linear > max_gain_linear:
+                gain_linear = max_gain_linear
+                # record that clamp occurred (store applied db)
+                applied_db = 20.0 * math.log10(gain_linear) if gain_linear > 0 else float('-inf')
+                debug['drone_spl_db_clamped_to_db'] = float(applied_db)
+            audio = audio * gain_linear
+            # keep debug keys for compatibility but store the sampled and applied relative gains
+            debug['drone_spl_db_set'] = float(gain_db)
+            debug['drone_source_gain_db'] = float(20.0 * math.log10(gain_linear) if gain_linear>0 else float('-inf'))
+    except Exception:
+        pass
 
     # attenuation (dB): att_dB = -20 * alpha * log10(dist/ref)
     ref = float(dist_cfg.get('ref_m', 1.0))

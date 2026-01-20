@@ -67,9 +67,12 @@ EXTRACTED_FEATURES_DIR = PROJECT_ROOT / "0 - DADS dataset extraction" / "extract
 MODELS_DIR = PROJECT_ROOT / "0 - DADS dataset extraction" / "saved_models"
 MODELS_DIR.mkdir(exist_ok=True)
 
-# Results save directory
+# Results save directory (canonical)
+# The project uses the canonical results location inside the repository.
+# Scripts MUST import `config.py` to discover this path. Do NOT rely on
+# environment variables to override the results location.
 RESULTS_DIR = PROJECT_ROOT / "0 - DADS dataset extraction" / "results"
-RESULTS_DIR.mkdir(exist_ok=True)
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # CNN Model paths
 CNN_MODEL_PATH = MODELS_DIR / "cnn_model.keras"
@@ -285,48 +288,28 @@ MEL_TRAIN_NPZ_PATH = EXTRACTED_FEATURES_DIR / "mel_train.npz"
 MEL_VAL_NPZ_PATH = EXTRACTED_FEATURES_DIR / "mel_val.npz"
 MEL_TEST_NPZ_PATH = EXTRACTED_FEATURES_DIR / "mel_test.npz"
 
-# Model inference configuration
-# Adaptive thresholds for each model (auto-calibrated or manually set)
-MODEL_THRESHOLDS = {
-    "CNN": 0.61,
-    "RNN": 0.01,
-    "CRNN": 0.70,
-    "Attention_CRNN": 0.77,
-}
-
-# Normalize MODEL_THRESHOLDS keys for internal use so scripts expecting
-# canonical uppercase names (e.g. 'ATTENTION_CRNN') work consistently.
-def _normalize_model_key(k: str) -> str:
-    # Make keys like 'Attention-CRNN' or 'Attention_CRNN' -> 'ATTENTION_CRNN'
-    return k.replace('-', '_').replace(' ', '_').upper()
-
-_NORMALIZED_THRESHOLDS = {}
-for _k, _v in MODEL_THRESHOLDS.items():
-    _NORMALIZED_THRESHOLDS[_normalize_model_key(_k)] = float(_v)
-
-# Expose a normalized mapping for internal lookup; keep original for backward compatibility
-MODEL_THRESHOLDS_NORMALIZED = _NORMALIZED_THRESHOLDS
-
-# Note: we intentionally avoid mutating `MODEL_THRESHOLDS` to add uppercase
-# duplicate keys (e.g. both 'Attention_CRNN' and 'ATTENTION_CRNN').
-# Use `MODEL_THRESHOLDS_NORMALIZED` for canonical uppercase lookup across
-# scripts. This prevents confusing duplicate entries in config dumps.
-
 # Auto-calibration settings
 # Enable automatic threshold calibration (scripts may choose to run calibration
 # on first performance evaluation when this is True).
 AUTO_CALIBRATE_THRESHOLDS = True  # Set to True to auto-calibrate on first performance calculation
+CALIBRATION_FILE_PATH = RESULTS_DIR / "calibrated_thresholds.json"
 
 # Default calibration behaviour (used by `calibrate_thresholds.py` when run
 # non-interactively or by automation). Use 'class_aware' to balance per-class
 # precision targets (recommended for reducing ambient false positives).
-CALIBRATION_MODE = 'class_aware'            # 'class_aware' | 'target_recall' | 'max_f1' | 'precision_at_recall' | 'weighted'
+# CALIBRATION_MODE = 'class_aware'            # 'class_aware' | 'target_recall' | 'max_f1' | 'precision_at_recall' | 'weighted'
 # Relaxed calibration defaults (favor more balanced recall/precision)
-CALIBRATION_MIN_PREC_DRONE = 0.70           # Minimum required precision for drone (positive) class (relaxed)
-CALIBRATION_MIN_PREC_AMBIENT = 0.85         # Minimum required precision / NPV for ambient (negative) class (relaxed)
-CALIBRATION_CLASS_ALPHA = 0.40              # Fallback weighting: alpha*prec_drone + (1-alpha)*prec_ambient (favor recall more)
-CALIBRATION_SAVE_TO_VISUALIZER = True       # Write `6 - Visualization/outputs/model_thresholds.json` when saving
+# CALIBRATION_MIN_PREC_DRONE = 0.70           # Minimum required precision for drone (positive) class (relaxed)
+# CALIBRATION_MIN_PREC_AMBIENT = 0.85         # Minimum required precision / NPV for ambient (negative) class (relaxed)
+# CALIBRATION_CLASS_ALPHA = 0.40              # Fallback weighting: alpha*prec_drone + (1-alpha)*prec_ambient (favor recall more)
+# CALIBRATION_SAVE_TO_VISUALIZER = True       # Write `6 - Visualization/outputs/model_thresholds.json` when saving
 
+# Constraint defaults for threshold calibration
+# CALIBRATION_CONSTRAINTS = {
+#     'min_recall': 0.90,  # Minimum 90% recall (max 10% false negatives)
+#     'min_precision_drone': 0.70,  # Minimum 70% drone precision (PPV)
+#     'min_precision_ambient': 0.85  # Minimum 85% ambient precision (NPV)
+# }
 TARGET_RECALL = 0.95  # Target recall for threshold calibration (fallback when using target_recall mode)
 
 # --- Training parameters (source of truth) --------------------------------
@@ -364,44 +347,6 @@ DEFAULT_DISTANCE_WEIGHTS = {
     50: 1.0,
     0: 1.0
 }
-
-# Path to calibrated thresholds JSON produced by `calibrate_thresholds.py`
-# This is the file the pipeline will create/remove between runs.
-CALIBRATION_FILE_PATH = RESULTS_DIR / "calibrated_thresholds.json"
-# String form (avoid calling get_path_str before it's defined)
-CALIBRATION_FILE_PATH_STR = str(CALIBRATION_FILE_PATH)
-
-# Constraint defaults for threshold calibration
-CALIBRATION_CONSTRAINTS = {
-    'min_recall': 0.90,  # Minimum 90% recall (max 10% false negatives)
-    'min_precision_drone': 0.70,  # Minimum 70% drone precision (PPV)
-    'min_precision_ambient': 0.85  # Minimum 85% ambient precision (NPV)
-}
-
-
-def load_calibrated_thresholds():
-    """Load thresholds from calibration JSON file.
-    
-    Returns:
-        dict: {model_name: threshold} or empty dict if file not found
-    """
-    if not CALIBRATION_FILE_PATH.exists():
-        return {}
-    
-    try:
-        import json
-        with open(CALIBRATION_FILE_PATH) as f:
-            calib_data = json.load(f)
-        
-        thresholds = {}
-        for model_name, model_data in calib_data.get('models', {}).items():
-            if 'threshold' in model_data:
-                thresholds[model_name] = model_data['threshold']
-        
-        return thresholds
-    except Exception as e:
-        print(f"Warning: Failed to load calibrated thresholds: {e}")
-        return {}
 
 # Enforce usage of precomputed features only. When True, any code path that would
 # compute MELs on-the-fly should instead read `mel_test_index.json` or fail.
@@ -472,42 +417,3 @@ MEL_VAL_INDEX_PATH_STR = get_path_str(MEL_VAL_INDEX_PATH)
 # String versions of voted paths dictionaries
 VOTED_PATHS_STR = {k: get_path_str(v) for k, v in VOTED_PATHS.items()}
 SCORES_PATHS_STR = {k: get_path_str(v) for k, v in SCORES_PATHS.items()}
-
-
-# Attempt to load auto-generated thresholds from visualization outputs. This file is
-# produced by the visualization/calibration steps and contains recommended
-# thresholds per model. If present, override `MODEL_THRESHOLDS` values with the
-# `target_threshold` (preferred) or `best_threshold` otherwise.
-try:
-    import json
-    VIS_THRESH_PATH = PROJECT_ROOT / '6 - Visualization' / 'outputs' / 'model_thresholds.json'
-    if VIS_THRESH_PATH.exists():
-        with open(VIS_THRESH_PATH, 'r') as _f:
-            vis_thresh = json.load(_f)
-
-        def normalize_name(name):
-            # Normalize keys like 'Attention-CRNN' -> 'ATTENTION_CRNN'
-            return ''.join(c if c.isalnum() else '_' for c in name).upper()
-
-        # Build mapping from normalized names to canonical config keys
-        canonical_keys = {k: k for k in MODEL_THRESHOLDS.keys()}
-        normalized_to_canonical = {normalize_name(k): k for k in canonical_keys}
-
-        for model_name, values in vis_thresh.items():
-            norm = normalize_name(model_name)
-            if norm in normalized_to_canonical:
-                canonical = normalized_to_canonical[norm]
-                # prefer target_threshold if available
-                chosen = values.get('target_threshold', values.get('best_threshold'))
-                try:
-                    MODEL_THRESHOLDS[canonical] = float(chosen)
-                    # Keep the normalized mapping in sync so imports that read
-                    # `MODEL_THRESHOLDS_NORMALIZED` after this point see updated values.
-                    MODEL_THRESHOLDS_NORMALIZED[_normalize_model_key(canonical)] = float(chosen)
-                except Exception:
-                    pass
-
-        print(f"[config] Loaded model thresholds from: {get_path_str(VIS_THRESH_PATH)}")
-except Exception:
-    # silently ignore to keep config import stable
-    pass

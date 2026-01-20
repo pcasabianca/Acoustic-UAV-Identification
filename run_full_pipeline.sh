@@ -610,72 +610,23 @@ calculate_performance() {
     
     local failed_tests=0
 
-    # LEGACY CLASS-AWARE WORKFLOW (deprecated but kept for compatibility)
-    if [ "$USE_CLASS_AWARE_CAL" = true ]; then
-        log STEP "Using class-aware calibration workflow"
-
-        # 1) Baseline run: generate predictions/scores with default threshold 0.5
-        CALIB_FILE="$PROJECT_DIR/0 - DADS dataset extraction/results/calibrated_thresholds.json"
-        if [ "$SKIP_PRE_CALIB_EVAL" = true ]; then
-            log STEP "Skipping pre-calibration baseline evaluation (--skip-pre-calib-eval)"
-        else
-            log INFO "[1/3] Baseline test run (threshold=0.5) for all models/splits"
-            # Remove any existing calibrated thresholds so Universal_Perf_Tester does not pick them up
-            if [ -f "$CALIB_FILE" ]; then
-                log INFO "Removing existing calibration file before baseline run: $CALIB_FILE"
-                rm -f "$CALIB_FILE"
+    log INFO "Running tests with calibrated thresholds from config"
+    for model in "${MODEL_ARRAY[@]}"; do
+        for split in train val test; do
+            log INFO "  • Calibrated test: $model on $split"
+            if ! "$VENV_PATH" "$tester" --model "$model" --split "$split" --workers "$WORKERS" 2>&1 | grep -v "cuda\|CUDA\|GPU"; then
+                log WARN "    ✗ Calibrated test failed: $model $split"
+                ((failed_tests++))
             fi
-            for model in "${MODEL_ARRAY[@]}"; do
-                for split in val test; do
-                    log INFO "  • Baseline: $model on $split"
-                    if ! "$VENV_PATH" "$tester" --model "$model" --split "$split" --threshold 0.5 --workers "$WORKERS" 2>&1 | grep -v "cuda\|CUDA\|GPU"; then
-                        log WARN "    ✗ Baseline test failed: $model $split"
-                        ((failed_tests++))
-                    fi
-                done
-            done
-        fi
+        done
+    done
 
-        # 2) Calibrate thresholds using class-aware calibration (saves visualizer JSON)
-        if [ "$SKIP_CALIBRATION" = true ]; then
-            log STEP "Skipping calibration step (--skip-calibration)"
-            if [ ! -f "$CALIB_FILE" ]; then
-                log ERROR "Calibration file not found: $CALIB_FILE (cannot skip calibration without existing file)"
-                exit 1
-            fi
-            log INFO "Using existing calibration file: $CALIB_FILE"
-        else
-            log INFO "[2/3] Running class-aware calibration (relaxed defaults)"
-            if ! "$VENV_PATH" "$PROJECT_DIR/calibrate_thresholds.py" --mode class_aware --min-prec-drone 0.7 --min-prec-ambient 0.85 --class-alpha 0.4 --max-class-acc-gap 0.2 --save 2>&1 | grep -v "cuda\|CUDA\|GPU"; then
-                log WARN "Calibration script reported warnings/errors"
-            else
-                log SUCCESS "Calibration completed and thresholds saved"
-            fi
-        fi
-
-        # 3) Re-run tests using calibrated thresholds (Universal_Perf_Tester defaults to config.MODEL_THRESHOLDS)
-        if [ "$SKIP_POST_CALIB_EVAL" = true ]; then
-            log STEP "Skipping post-calibration evaluation (--skip-post-calib-eval)"
-        else
-            log INFO "[3/3] Re-running tests with calibrated thresholds from config"
-            for model in "${MODEL_ARRAY[@]}"; do
-                for split in train val test; do
-                    log INFO "  • Calibrated test: $model on $split"
-                    if ! "$VENV_PATH" "$tester" --model "$model" --split "$split" --workers "$WORKERS" 2>&1 | grep -v "cuda\|CUDA\|GPU"; then
-                        log WARN "    ✗ Calibrated test failed: $model $split"
-                        ((failed_tests++))
-                    fi
-                done
-            done
-        fi
-
-        if [ $failed_tests -eq 0 ]; then
-            log SUCCESS "Class-aware calibration workflow completed successfully"
-        else
-            log WARN "Class-aware calibration workflow completed with $failed_tests issues"
-        fi
-        return
+    if [ $failed_tests -eq 0 ]; then
+        log SUCCESS "Class-aware calibration workflow completed successfully"
+    else
+        log WARN "Class-aware calibration workflow completed with $failed_tests issues"
     fi
+    return
 
     # Test with calibrated thresholds on all splits
     log INFO "Testing models with calibrated thresholds on all splits..."

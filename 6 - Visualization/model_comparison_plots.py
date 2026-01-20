@@ -19,15 +19,14 @@ def load_best_results():
     Charge le résumé des meilleurs résultats (créé par select_best_results.py).
     """
     summary_file = config.PERFORMANCE_DIR / "best_results_summary.json"
-    
+
     if not summary_file.exists():
-        print(f"[WARNING] Best results summary not found: {summary_file}")
-        print("[INFO] Ensure canonical performance JSONs exist in config.PERFORMANCE_DIR or run the visualizer pipeline.")
-        return None
-    
+        print(f"[ERROR] Best results summary not found: {summary_file}")
+        print("[ERROR] model_comparison_plots requires best_results_summary.json created by the selector or precomputed pipeline.")
+        raise RuntimeError('best_results_summary.json missing')
+
     with open(summary_file, 'r') as f:
         data = json.load(f)
-
     results = data.get('results', {})
     # Validation stricte: chaque entrée doit contenir les métriques attendues
     required_metrics = ['accuracy', 'f1_score', 'precision', 'recall']

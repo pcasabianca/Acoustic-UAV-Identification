@@ -1,102 +1,219 @@
 {
-  "version": "4.0-minimal-test",
-  "advanced": { "random_seed": 42, "num_workers": 2 },
+  "version": "4.0-large-train",
+  "advanced": { "random_seed": 42, "num_workers": 8 },
   "audio_parameters": { "sample_rate": 22050, "target_duration_sec": 4 },
-  
-  "class_proportions": { "drone": 0.5, "no_drone": 0.5 },
+
+  "class_proportions": { "drone": 0.7, "no_drone": 0.3 },
+
   "augmentation_scenarios": [
     {
-      "name": "ambient_only",
-      "proportion": 0.25,
-      "description": "ambient only",
-      "ambients": [10]
-    },
-    {
-      "name": "single_drone_close_snr",
-      "proportion": 0.25,
-      "description": "one drone at 5m + ambient, fixed SNR",
-      "drones": [5],
-      "ambients": [15],
-      "snr_db": -10
-    },
-    {
-      "name": "single_drone_close",
-      "proportion": 0.25,
-      "description": "one drone at 5m + ambient",
-      "drones": [5],
-      "ambients": [15]
-    },
-    {
-      "name": "multi_drone_hard_snr",
-      "proportion": 0.25,
-      "description": "two drones at 7m and 20m + two ambients, fixed SNR",
-      "drones": [7, 20],
-      "ambients": [10, 25],
-      "snr_db": -20
-    }
-    ,
-    {
-      "name": "reverb_pre_smallroom",
-      "proportion": 0.15,
-      "description": "apply small-room reverb per-source before mix",
-      "drones": [5],
-      "ambients": [10],
-      "reverb": { "mode": "pre", "type": "synthetic", "rt60_target": 0.4, "wet": 0.5, "dry": 0.5 }
-    },
-    {
-      "name": "reverb_post_hall",
-      "proportion": 0.15,
-      "description": "apply hall reverb after mix",
-      "drones": [5],
-      "ambients": [15],
-      "reverb": { "mode": "post", "type": "synthetic", "rt60_target": 1.2, "wet": 0.7, "dry": 0.3 }
-    }
-    ,
-    {
-      "name": "env_city_drone_flyby",
+      "name": "ambient_outdoor_urban",
       "proportion": 0.10,
-      "description": "drone flyby in urban environment with doppler + filters + mems sim",
-      "drones": [30],
-      "ambients": [10, 20],
-      "environment": {
-        "trajectory": { "start_m": 50, "end_m": 5, "duration_s": 4.0 },
-        "appear": { "fade_in_ms": 150, "fade_out_ms": 300 },
-        "distance": { "ref_m": 1.0, "alpha": 1.0 },
-        "modifiers": [
-          { "name": "doppler", "params": { "v_m_s": 15, "dir": 1 } },
-          { "name": "filters", "params": { "type": "low", "cutoff": [2000, 4000] } },
-          { "name": "pitch", "params": { "semitones": [-1, 1] } },
-          { "name": "hardware_wrapper", "params": { "chain": [
-            { "name": "mems", "params": { "tilt_db_per_octave": -4.0, "hf_rolloff_hz": 8000, "snr_floor_db": 50.0, "bit_depth": 16, "glitch_rate": 0.0005 } },
-            { "name": "hardware_noise", "params": { "noise_type": "pink", "snr_db": 30 } },
-            { "name": "adc_artifacts", "params": { "max_jitter_ms": 0.5, "dropout_prob_per_s": 0.001, "dropout_max_ms": 2, "bits": 16 } },
-            { "name": "occlusion", "params": { "cutoff_hz": 2000, "attenuation_db": -6, "event_prob": 0.2, "event_ms": 200 } }
-          ] } }
-        ]
-      }
+      "description": "urban ambient: traffic, voices, construction",
+      "ambients": [10],
+      "ambient_spl_db_range": [-6, 6],
+      "environments": ["urban"],
+      "augmentations": { "reverb": false }
     },
     {
-      "name": "env_rural_pass",
+      "name": "ambient_outdoor_rural",
+      "proportion": 0.0666667,
+      "description": "rural ambient: wind, birds, fields",
+      "ambients": [20],
+      "ambient_spl_db_range": [-6, 6],
+      "environments": ["rural"],
+      "augmentations": { "reverb": false }
+    },
+    {
+      "name": "ambient_indoor_quiet",
+      "proportion": 0.0333333,
+      "description": "indoor quiet: office, low activity",
+      "ambients": [5],
+      "ambient_spl_db_range": [-6, 6],
+      "environments": ["indoor"],
+      "augmentations": { "reverb": false }
+    },
+    {
+      "name": "ambient_indoor_reverb",
+      "proportion": 0.0333333,
+      "description": "indoor reverberant: halls, large rooms",
+      "ambients": [8],
+      "ambient_spl_db_range": [-6, 6],
+      "environments": ["indoor"],
+      "augmentations": { "reverb": { "mode": "post", "rt60_target": 1.0, "wet": 0.6 } }
+    },
+    {
+      "name": "ambient_traffic_heavy",
       "proportion": 0.05,
-      "description": "rural pass with long distance and MEMS mic simulation",
-      "drones": [80],
-      "ambients": [30],
-      "environment": {
-        "trajectory": { "start_m": 120, "end_m": 30, "duration_s": 4.0 },
-        "appear": { "fade_in_ms": 50, "fade_out_ms": 200 },
-        "distance": { "ref_m": 1.0, "alpha": 1.0 },
-        "modifiers": [
-          { "name": "filters", "params": { "type": "band", "cutoff": [300, 4000] } },
-          { "name": "doppler", "params": { "v_m_s": 8, "dir": -1 } },
-          { "name": "hardware_wrapper", "params": { "chain": [
-            { "name": "mems", "params": { "tilt_db_per_octave": -6.0, "hf_rolloff_hz": 6000, "snr_floor_db": 48.0, "bit_depth": 12, "glitch_rate": 0.0002 } },
-            { "name": "hardware_noise", "params": { "noise_type": "white", "snr_db": 35 } },
-            { "name": "adc_artifacts", "params": { "max_jitter_ms": 0.3, "dropout_prob_per_s": 0.0005, "dropout_max_ms": 2, "bits": 12 } }
-          ] } }
-        ]
-      }
+      "description": "heavy traffic/background machinery",
+      "ambients": [12],
+      "ambient_spl_db_range": [-6, 6],
+      "environments": ["urban","industrial"],
+      "augmentations": { "reverb": false }
+    },
+    {
+      "name": "ambient_industrial",
+      "proportion": 0.0166667,
+      "description": "industrial continuous noise",
+      "ambients": [15],
+      "ambient_spl_db_range": [-6, 6],
+      "environments": ["industrial"],
+      "augmentations": { "reverb": false }
+    },
+
+    {
+      "name": "drone_single_close_50m",
+      "proportion": 0.0833333,
+      "description": "single drone nominal 50 m (easier)",
+      "drones": [50],
+      "ambients": [10, 12],
+      "ambient_spl_db_range": [-6, 6],
+      "drone_spl_db_range": [0, 6],
+      "environments": ["urban","rural"],
+      "augmentations": { "pitch_shift_prob": 0.2, "time_stretch_prob": 0.1 }
+    },
+    {
+      "name": "drone_single_near_100m",
+      "proportion": 0.0666667,
+      "description": "single drone nominal 100 m",
+      "drones": [100],
+      "ambients": [10, 20],
+      "ambient_spl_db_range": [-6, 6],
+      "drone_spl_db_range": [-2, 4],
+      "environments": ["urban","rural"],
+      "augmentations": { "pitch_shift_prob": 0.2 }
+    },
+    {
+      "name": "drone_flyby_urban_close",
+      "proportion": 0.06,
+      "description": "urban flyby trajectory, start farther end close",
+      "drones": [100, 10],
+      "ambients": [10, 15],
+      "ambient_spl_db_range": [-6, 6],
+      "drone_spl_db_range": [0, 6],
+      "environment": { "trajectory": { "start_m": 120, "end_m": 10, "duration_s": 4.0 } },
+      "augmentations": { "doppler": true }
+    },
+    {
+      "name": "drone_single_mid_200m",
+      "proportion": 0.0833333,
+      "description": "single drone nominal 200 m (medium difficulty)",
+      "drones": [200],
+      "ambients": [20, 30],
+      "ambient_spl_db_range": [-6, 6],
+      "drone_spl_db_range": [-6, 2],
+      "environments": ["rural"],
+      "augmentations": { "reverb": false }
+    },
+    {
+      "name": "drone_reverb_indoor",
+      "proportion": 0.0666667,
+      "description": "drone recorded or simulated inside reverberant space",
+      "drones": [20],
+      "ambients": [8],
+      "ambient_spl_db_range": [-6, 6],
+      "drone_spl_db_range": [0, 6],
+      "environments": ["indoor"],
+      "augmentations": { "reverb": { "mode": "pre", "rt60_target": 0.8, "wet": 0.5 } }
+    },
+    {
+      "name": "drone_multi_moderate_200m",
+      "proportion": 0.06,
+      "description": "multiple drones (2-4) around 200 m",
+      "drones": [180, 220],
+      "ambients": [20, 30],
+      "ambient_spl_db_range": [-6, 6],
+      "drone_spl_db_range": [-6, 2],
+      "environments": ["rural"],
+      "augmentations": { "multi_drone": { "min": 2, "max": 4 } }
+    },
+    {
+      "name": "drone_single_far_500m",
+      "proportion": 0.10,
+      "description": "single drone nominal 500 m (hard)",
+      "drones": [500],
+      "ambients": [20, 30, 40],
+      "ambient_spl_db_range": [-6, 6],
+      "drone_spl_db_range": [-12, 0],
+      "environments": ["urban","rural"],
+      "augmentations": { "low_snr_noise_mix_prob": 0.6 }
+    },
+    {
+      "name": "drone_single_extreme_1000m",
+      "proportion": 0.0666667,
+      "description": "single drone nominal 1000 m (very hard)",
+      "drones": [1000],
+      "ambients": [30, 40],
+      "ambient_spl_db_range": [-6, 6],
+      "drone_spl_db_range": [-18, -6],
+      "environments": ["rural"],
+      "augmentations": { "low_snr_noise_mix_prob": 0.8 }
+    },
+    {
+      "name": "drone_multi_dense_500m",
+      "proportion": 0.0666667,
+      "description": "dense multi-drone scene around 500 m (hard)",
+      "drones": [450, 520, 600],
+      "ambients": [30, 40],
+      "ambient_spl_db_range": [-6, 6],
+      "drone_spl_db_range": [-12, -2],
+      "environments": ["rural","industrial"],
+      "augmentations": { "multi_drone": { "min": 3, "max": 6 } }
+    },
+    {
+      "name": "drone_low_snr_hard",
+      "proportion": 0.0466667,
+      "description": "targeted low-SNR difficulty: nominal distance 500 m with strong ambient masking",
+      "drones": [500],
+      "ambients": [40, 50],
+      "ambient_spl_db_range": [0, 12],
+      "drone_spl_db_range": [-24, -6],
+      "environments": ["urban","industrial"],
+      "augmentations": { "aggressive_noise_mixture": true }
     }
   ],
+
+  "advanced_augmentations": {
+    "enabled": true,
+    "doppler_shift": {
+      "enabled": true,
+      "range": [
+        -0.5,
+        0.5
+      ],
+      "description": "Simulate approach/recede Doppler shifts (semitones)"
+    },
+    "intensity_modulation": {
+      "enabled": true,
+      "freq_range": [
+        0.5,
+        2.0
+      ],
+      "depth": 0.3,
+      "description": "Motor RPM amplitude modulation"
+    },
+    "reverberation": {
+      "enabled": true,
+      "delay_range": [50, 200],
+      "decay_range": [0.2, 0.4],
+      "description": "Environment reflections (post / pre reverbs applied by scenario)"
+    },
+    "time_stretch": {
+      "enabled": true,
+      "rate_range": [0.95, 1.05],
+      "description": "Small time-stretch to simulate rotor speed variations"
+    }
+  },
+
+  "mems_simulation": {
+    "enabled": true,
+    "highpass_cutoff_hz": 100,
+    "noise_floor_db": -60,
+    "max_spl_db": 94,
+    "apply_probability": 0.5,
+    "description": "Top-level MEMS microphone simulation (HPF, thermal noise, SPL limiting)"
+  },
+
   "distance": { "ref_m": 1.0, "alpha": 1.0 },
 
   "output": {

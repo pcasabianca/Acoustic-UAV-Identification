@@ -41,7 +41,7 @@ def load_best_results_summary():
     
     if not summary_file.exists():
         return None
-    
+
     with open(summary_file, 'r') as f:
         return json.load(f)
 

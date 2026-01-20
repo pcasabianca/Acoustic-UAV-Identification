@@ -16,16 +16,19 @@ import argparse
 # Import project config
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
+
+# Force non-interactive Matplotlib backend for headless environments
+import matplotlib
+matplotlib.use('Agg')
+
 from tools import plot_utils
 
 # Import visualization modules
-import select_best_results
 import performance_comparison_best
 import threshold_calibration_comparison
 import model_comparison_plots
 import snr_distribution
 import modern_dataset_analysis
-import modern_threshold_calibration
 import modern_audio_examples
 import threshold_analysis
 import generate_html_report
@@ -73,14 +76,12 @@ def main():
     steps = []
     step_num = 1
     
-    # Step 0: Select best results (prerequisite)
-    steps.append((step_num, "Select Best Results", select_best_results.main,
-                  "Analyzing all performance JSONs to identify best configurations..."))
-    step_num += 1
+    # NOTE: This pipeline only reads precomputed performance JSONs (test set)
+    # and plots them directly. Threshold selection is not performed here.
     
     # Step 1: Performance comparison
-    steps.append((step_num, "Performance Comparison (Best Thresholds)", performance_comparison_best.main,
-                  "Loading best results and generating comparison plots..."))
+    steps.append((step_num, "Performance Comparison", performance_comparison_best.main,
+                  "Loading test-set results and generating comparison plots..."))
     step_num += 1
     
     # Step 2: Threshold calibration comparison
@@ -109,11 +110,7 @@ def main():
                       "Analyzing calibrated thresholds and optimization curves..."))
         step_num += 1
     
-    # Step 7: Legacy threshold calibration (optional)
-    if not args.skip_threshold:
-        steps.append((step_num, "Legacy Threshold Calibration", modern_threshold_calibration.main,
-                      "Generating threshold recommendations..."))
-        step_num += 1
+    # Legacy threshold-calibration step removed (consolidated into Threshold Calibration Comparison)
     
     # Step 8: Audio examples (optional)
     if not args.skip_audio:
@@ -128,23 +125,10 @@ def main():
     # Validate performance files before running (fail-fast)
     print("\n[INFO] Validating performance JSON files (fail-fast)...")
     perf_dir = config.PERFORMANCE_DIR
-    best_summary = perf_dir / 'best_results_summary.json'
-    expected_files = []
-    if best_summary.exists():
-        try:
-            with open(best_summary, 'r') as f:
-                summary = json.load(f)
-            for key, entry in summary.get('results', {}).items():
-                model = entry.get('model')
-                split = entry.get('split')
-                if model and split:
-                    expected_files.append(perf_dir / f"{model.lower()}_{split}.json")
-        except Exception as e:
-            print(f"[ERROR] Could not read best_results_summary.json: {e}")
-            return 1
-    else:
-        # Fallback: validate all json files in performance dir
-        expected_files = list(perf_dir.glob('*.json'))
+    # Only validate test-set performance JSONs. Ignore summary files
+    # (e.g. best_results_summary.json) and other non-test artifacts; the
+    # visualizer must plot the test results produced by Universal_Perf_Tester.
+    expected_files = list(perf_dir.glob('*_test.json'))
 
     def validate_perf_file(p):
         try:
@@ -160,6 +144,8 @@ def main():
                 raise RuntimeError(f"Missing top-level key '{k}' in {p}")
 
         meta = data['metadata']
+        # Require minimal metadata fields. `threshold` is mandatory — visualizations
+        # rely on `metadata.threshold` produced by the testing step (Universal_Perf_Tester).
         for mk in ['model', 'split', 'threshold', 'total_samples']:
             if mk not in meta:
                 raise RuntimeError(f"Missing metadata.{mk} in {p}")
@@ -244,7 +230,7 @@ def main():
     print("\n" + "="*80)
     print("\n💡 Quick Access:")
     print(f"  📊 Performance Report: {output_dir / 'performance_report.html'}")
-    print(f"  📈 Best Results: {config.PERFORMANCE_DIR / 'best_results_summary.json'}")
+    print(f"  📈 Performance JSONs: {config.PERFORMANCE_DIR}")
     if not args.skip_audio and (output_dir / 'audio_examples' / 'index.html').exists():
         print(f"  🔊 Audio Examples: {output_dir / 'audio_examples' / 'index.html'}")
     print("\n" + "="*80)

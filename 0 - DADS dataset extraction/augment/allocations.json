@@ -14,82 +14,154 @@
     "master_seed": 42
   },
   "scenarios": {
-    "ambient_only": {
-      "total": 172,
+    "ambient_outdoor_urban": {
+      "total": 100,
       "per_split": {
-        "dataset_train": 120,
-        "dataset_val": 26,
-        "dataset_test": 26
-      },
-      "weight": 0.25
-    },
-    "single_drone_close_snr": {
-      "total": 172,
-      "per_split": {
-        "dataset_train": 120,
-        "dataset_val": 26,
-        "dataset_test": 26
-      },
-      "weight": 0.25
-    },
-    "single_drone_close": {
-      "total": 172,
-      "per_split": {
-        "dataset_train": 120,
-        "dataset_val": 26,
-        "dataset_test": 26
-      },
-      "weight": 0.25
-    },
-    "multi_drone_hard_snr": {
-      "total": 172,
-      "per_split": {
-        "dataset_train": 120,
-        "dataset_val": 26,
-        "dataset_test": 26
-      },
-      "weight": 0.25
-    },
-    "reverb_pre_smallroom": {
-      "total": 104,
-      "per_split": {
-        "dataset_train": 73,
+        "dataset_train": 70,
         "dataset_val": 15,
-        "dataset_test": 16
-      },
-      "weight": 0.15
-    },
-    "reverb_post_hall": {
-      "total": 104,
-      "per_split": {
-        "dataset_train": 73,
-        "dataset_val": 16,
         "dataset_test": 15
-      },
-      "weight": 0.15
-    },
-    "env_city_drone_flyby": {
-      "total": 69,
-      "per_split": {
-        "dataset_train": 48,
-        "dataset_val": 11,
-        "dataset_test": 10
       },
       "weight": 0.1
     },
-    "env_rural_pass": {
-      "total": 35,
+    "ambient_outdoor_rural": {
+      "total": 67,
       "per_split": {
-        "dataset_train": 25,
+        "dataset_train": 47,
+        "dataset_val": 10,
+        "dataset_test": 10
+      },
+      "weight": 0.0666667
+    },
+    "ambient_indoor_quiet": {
+      "total": 33,
+      "per_split": {
+        "dataset_train": 23,
         "dataset_val": 5,
         "dataset_test": 5
       },
+      "weight": 0.0333333
+    },
+    "ambient_indoor_reverb": {
+      "total": 33,
+      "per_split": {
+        "dataset_train": 23,
+        "dataset_val": 5,
+        "dataset_test": 5
+      },
+      "weight": 0.0333333
+    },
+    "ambient_traffic_heavy": {
+      "total": 50,
+      "per_split": {
+        "dataset_train": 35,
+        "dataset_val": 7,
+        "dataset_test": 8
+      },
       "weight": 0.05
+    },
+    "ambient_industrial": {
+      "total": 17,
+      "per_split": {
+        "dataset_train": 12,
+        "dataset_val": 3,
+        "dataset_test": 2
+      },
+      "weight": 0.0166667
+    },
+    "drone_single_close_50m": {
+      "total": 83,
+      "per_split": {
+        "dataset_train": 58,
+        "dataset_val": 13,
+        "dataset_test": 12
+      },
+      "weight": 0.0833333
+    },
+    "drone_single_near_100m": {
+      "total": 67,
+      "per_split": {
+        "dataset_train": 47,
+        "dataset_val": 10,
+        "dataset_test": 10
+      },
+      "weight": 0.0666667
+    },
+    "drone_flyby_urban_close": {
+      "total": 60,
+      "per_split": {
+        "dataset_train": 42,
+        "dataset_val": 9,
+        "dataset_test": 9
+      },
+      "weight": 0.06
+    },
+    "drone_single_mid_200m": {
+      "total": 83,
+      "per_split": {
+        "dataset_train": 58,
+        "dataset_val": 13,
+        "dataset_test": 12
+      },
+      "weight": 0.0833333
+    },
+    "drone_reverb_indoor": {
+      "total": 66,
+      "per_split": {
+        "dataset_train": 46,
+        "dataset_val": 10,
+        "dataset_test": 10
+      },
+      "weight": 0.0666667
+    },
+    "drone_multi_moderate_200m": {
+      "total": 60,
+      "per_split": {
+        "dataset_train": 42,
+        "dataset_val": 9,
+        "dataset_test": 9
+      },
+      "weight": 0.06
+    },
+    "drone_single_far_500m": {
+      "total": 100,
+      "per_split": {
+        "dataset_train": 70,
+        "dataset_val": 15,
+        "dataset_test": 15
+      },
+      "weight": 0.1
+    },
+    "drone_single_extreme_1000m": {
+      "total": 67,
+      "per_split": {
+        "dataset_train": 47,
+        "dataset_val": 10,
+        "dataset_test": 10
+      },
+      "weight": 0.0666667
+    },
+    "drone_multi_dense_500m": {
+      "total": 67,
+      "per_split": {
+        "dataset_train": 47,
+        "dataset_val": 10,
+        "dataset_test": 10
+      },
+      "weight": 0.0666667
+    },
+    "drone_low_snr_hard": {
+      "total": 47,
+      "per_split": {
+        "dataset_train": 33,
+        "dataset_val": 7,
+        "dataset_test": 7
+      },
+      "weight": 0.0466667
     }
   },
   "per_split_totals": {
-    "dataset_train": 699,
+    "dataset_train": 700,
     "dataset_val": 151,
-    "dataset_test": 150
+    "dataset_test": 149
   }
 }

@@ -1,7 +1,7 @@
 """
-Performance Comparison - Best Results Only
-Charge uniquement les meilleurs résultats (un threshold par modèle/split)
-et génère des visualisations claires et utiles.
+Performance Comparison (Test Set)
+Charge les résultats de test précalculés et génère des visualisations.
+Ne sélectionne pas ou n'impose pas de thresholds.
 """
 
 import sys
@@ -14,78 +14,20 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
-
-# Debug: show calibration file and normalized thresholds
-try:
-    print(f"[DEBUG performance_comparison_best] CALIBRATION_FILE_PATH={getattr(config,'CALIBRATION_FILE_PATH',None)}")
-    print(f"[DEBUG performance_comparison_best] MODEL_THRESHOLDS_NORMALIZED={config.MODEL_THRESHOLDS_NORMALIZED}")
-except Exception:
-    pass
 from tools import plot_utils
 
 plot_utils.set_style()
 OUTPUT_DIR = plot_utils.get_output_dir(__file__)
 
-
-def load_best_results():
-    """Charge le résumé des meilleurs résultats."""
-    summary_file = config.PERFORMANCE_DIR / "best_results_summary.json"
-    
-    if not summary_file.exists():
-        print(f"[ERROR] Best results not found: {summary_file}")
-        print("[INFO] Ensure canonical performance JSONs exist in config.PERFORMANCE_DIR and run the visualizer pipeline.")
-        return None
-    
-    with open(summary_file, 'r') as f:
-        data = json.load(f)
-    
-    # Charger les fichiers JSON complets correspondants
-    results = {}
-    perf_dir = config.PERFORMANCE_DIR
-    
-    for key, summary in data.get('results', {}).items():
-        model = summary['model']
-        split = summary['split']
-        threshold = summary['threshold']
-        
-        # Trouver le fichier JSON correspondant (canonique: {model}_{split}.json)
-        json_file = perf_dir / f"{model.lower()}_{split}.json"
-
-        if not json_file.exists():
-            print(f"  ✗ Missing canonical perf file: {json_file.name}")
-            continue
-
-        try:
-            with open(json_file, 'r') as f:
-                full_data = json.load(f)
-
-            # Validate minimal structure of the loaded performance file
-            for tk in ('metadata', 'global_metrics', 'class_metrics', 'predictions'):
-                if tk not in full_data:
-                    print(f"  ✗ {json_file.name} missing key: {tk}")
-                    raise RuntimeError(f"Invalid performance file: {json_file.name}")
-
-            # Prefer threshold found in file metadata; fall back to summary threshold
-            file_threshold = full_data.get('metadata', {}).get('threshold', threshold)
-            key_tuple = (model, split, file_threshold)
-            results[key_tuple] = full_data
-            print(f"  ✓ Loaded: {model} | {split} | t={file_threshold:.2f}")
-
-        except Exception as e:
-            print(f"  ✗ Error loading {json_file.name}: {e}")
-    
-    return results
-
-
 def plot_global_metrics_comparison(results, output_dir):
     """Comparaison des métriques globales - meilleurs résultats uniquement."""
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    fig.suptitle('Global Performance Comparison (Best Thresholds)', fontsize=16, fontweight='bold')
+    fig.suptitle('Global Performance Comparison (Test Set)', fontsize=16, fontweight='bold')
     
     # Grouper par modèle et split
     model_split_data = defaultdict(lambda: defaultdict(dict))
     
-    for (model, split, threshold), data in results.items():
+    for (model, split, _), data in results.items():
         metrics = data.get('global_metrics', {})
         model_split_data[model][split] = metrics
     
@@ -151,9 +93,9 @@ def plot_confusion_matrices(results, output_dir):
     else:
         axes = axes.flatten() if n_models > 1 else [axes]
     
-    fig.suptitle('Confusion Matrices (Test Set - Best Thresholds)', fontsize=16, fontweight='bold')
+    fig.suptitle('Confusion Matrices (Test Set)', fontsize=16, fontweight='bold')
     
-    for idx, ((model, split, threshold), data) in enumerate(sorted(test_results.items())):
+    for idx, ((model, split, _), data) in enumerate(sorted(test_results.items())):
         metrics = data.get('global_metrics', {})
         
         tp = metrics.get('tp', 0)
@@ -169,7 +111,7 @@ def plot_confusion_matrices(results, output_dir):
         
         ax.set_xlabel('Predicted', fontweight='bold')
         ax.set_ylabel('Actual', fontweight='bold')
-        ax.set_title(f'{model} | t={threshold:.2f}\nAcc={metrics.get("accuracy", 0):.3f}, F1={metrics.get("f1_score", 0):.3f}', 
+        ax.set_title(f'{model}\nAcc={metrics.get("accuracy", 0):.3f}, F1={metrics.get("f1_score", 0):.3f}', 
                     fontweight='bold')
         ax.set_xticklabels(['No Drone', 'Drone'])
         ax.set_yticklabels(['No Drone', 'Drone'])
@@ -193,7 +135,7 @@ def plot_class_performance(results, output_dir):
         return
     
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-    fig.suptitle('Class Performance (Test Set - Best Thresholds)', fontsize=16, fontweight='bold')
+    fig.suptitle('Class Performance (Test Set)', fontsize=16, fontweight='bold')
     
     models = sorted([k[0] for k in test_results.keys()])
     
@@ -425,23 +367,52 @@ def plot_subcategory_heatmap(results, output_dir):
         examples = ', '.join([f"{t[0]}({t[1]} vs {t[2]})" for t in ties[:12]])
         raise RuntimeError(f"Tie or no majority class for scenarios: {examples}")
 
+    # Detect scenarios that contain only a single class (these produce misleading accuracies)
+    single_class_scenarios = [s for s in all_subcats if (scenario_class_counts[s]['class_0'] == 0 or scenario_class_counts[s]['class_1'] == 0)]
+    single_class_flag = set(single_class_scenarios)
+    if single_class_scenarios:
+        print(f"  ⚠ Single-class scenarios detected (marked with '*' in heatmap labels): {single_class_scenarios}")
+        # NOTE: do not blank these columns entirely — instead mark them in the x-tick labels
+        # so the user can still inspect per-model accuracy for that scenario while being
+        # warned that the column contains samples of only one class (so accuracy may be
+        # trivially high and should be interpreted accordingly).
+
+    # Keep original ordering reference for indexing later
+    orig_all_subcats = list(all_subcats)
+
     # Sort each group by mean SNR ascending (lower SNR -> harder)
     class0_sorted = sorted(class0, key=lambda x: scenario_snr_mean.get(x, float('nan')))
     class1_sorted = sorted(class1, key=lambda x: scenario_snr_mean.get(x, float('nan')))
     ordered_all_subcats = class0_sorted + class1_sorted
 
+    # Keep single-class scenarios visible but clearly marked. Single-class
+    # columns are often trivially perfect; annotate them with '*' so the
+    # user can inspect them while being warned about their single-class nature.
+    if single_class_scenarios:
+        print(f"  ⚠ Single-class scenarios detected (marked with '*' in heatmap labels): {single_class_scenarios}")
+
+    def _snr_label(s):
+        v = scenario_snr_mean.get(s, float('nan'))
+        # Detect NaN
+        if v != v:
+            snr_part = 'n/a'
+        else:
+            snr_part = f"{v:.1f} dB"
+        mark = ' *' if s in single_class_flag else ''
+        return f"{s}{mark}\n{snr_part}"
+
     # Build xtick labels that include mean SNR per scenario in the new order
-    xtick_labels = [f"{s}\n{scenario_snr_mean.get(s, float('nan')):.1f} dB" for s in ordered_all_subcats]
+    xtick_labels = [_snr_label(s) for s in ordered_all_subcats]
 
     # Reorder accuracy_matrix columns to match ordered_all_subcats
-    col_idx = [all_subcats.index(s) for s in ordered_all_subcats]
+    col_idx = [orig_all_subcats.index(s) for s in ordered_all_subcats]
     accuracy_matrix_reordered = accuracy_matrix[:, col_idx]
 
     sns.heatmap(accuracy_matrix_reordered, annot=True, fmt='.3f', cmap='RdYlGn', ax=ax,
                xticklabels=xtick_labels, yticklabels=models, cbar_kws={'label': 'Accuracy'},
                vmin=vmin_dynamic, vmax=vmax_dynamic, linewidths=0.5, linecolor='gray')
     
-    ax.set_title('Accuracy Heatmap by Subcategory (Test Set - Best Thresholds)', fontweight='bold', fontsize=14)
+    ax.set_title('Accuracy Heatmap by Subcategory (Test Set)', fontweight='bold', fontsize=14)
     ax.set_xlabel('Subcategory', fontweight='bold')
     ax.set_ylabel('Model', fontweight='bold')
     plt.xticks(rotation=45, ha='right')
@@ -452,20 +423,58 @@ def plot_subcategory_heatmap(results, output_dir):
     print(f"  ✓ Saved: {output_path}")
     plt.close()
 
+def load_results(folder):
+    """
+    Charge les résultats de performance depuis le dossier spécifié.
+    """
+    perf_dir = Path(folder)
+    if not perf_dir.exists():
+        print(f"[ERROR] Performance directory not found: {perf_dir}")
+        return {}
+
+    results = {}
+    for json_path in sorted(perf_dir.glob("*_test.json")):
+        try:
+            with open(json_path, 'r') as f:
+                full_data = json.load(f)
+
+            # Minimal validation
+            for tk in ('metadata', 'global_metrics', 'class_metrics', 'predictions'):
+                if tk not in full_data:
+                    print(f"  ✗ {json_path.name} missing key: {tk}")
+                    raise RuntimeError(f"Invalid performance file: {json_path.name}")
+
+            meta = full_data.get('metadata', {})
+            model = meta.get('model')
+            split = meta.get('split')
+            if model is None or split is None:
+                print(f"  ✗ {json_path.name} missing metadata.model or metadata.split")
+                continue
+
+            file_threshold = meta.get('threshold')
+            if file_threshold is None:
+                print(f"  ✗ {json_path.name} missing metadata.threshold — produced JSONs must include this field")
+                raise RuntimeError(f"Missing metadata.threshold in {json_path.name}")
+
+            key_tuple = (model, split, float(file_threshold))
+            results[key_tuple] = full_data
+            print(f"  ✓ Loaded: {model} | {split} | t={float(file_threshold):.3f}")
+
+        except Exception as e:
+            print(f"  ✗ Error loading {json_path.name}: {e}")
+
+    if not results:
+        print("[WARN] No valid performance JSONs loaded from PERFORMANCE_DIR")
+    return results
+    
 
 def main():
+
     print("\n" + "=" * 80)
-    print("PERFORMANCE COMPARISON - BEST RESULTS ONLY")
-    print("=" * 80)
+    print("\n[1/5]Loading results...")
     
-    print("\n[1/5] Loading best results...")
-    results = load_best_results()
-    
-    if not results:
-        print("[ERROR] No results loaded. Run select_best_results.py first!")
-        return
-    
-    print(f"[OK] Loaded {len(results)} best configurations")
+    print(f"{'Loading performance results from:':<40} {config.PERFORMANCE_DIR}")
+    results = load_results(config.PERFORMANCE_DIR)
     
     print("\n[2/5] Plotting global metrics comparison...")
     plot_global_metrics_comparison(results, OUTPUT_DIR)

@@ -134,27 +134,24 @@ def main():
     print("=" * 80)
     print("  BEST RESULTS SELECTOR")
     print("=" * 80)
-    print()
-    
-    # Charger et sélectionner les meilleurs
-    best_results = load_and_select_best_results()
-    
-    if not best_results:
-        print("[ERROR] No results found!")
-        return {}
-    
-    print(f"\n[INFO] Selected {len(best_results)} best configurations")
-    
-    # Sauvegarder le résumé
-    output_dir = Path(config.PERFORMANCE_DIR)
-    output_file = output_dir / "best_results_summary.json"
-    save_best_results_summary(best_results, output_file)
-    
-    # Afficher tableau récapitulatif
-    print("\n" + "=" * 80)
-    print("  SUMMARY TABLE")
-    print("=" * 80)
-    print(f"{'Model':<15} {'Split':<8} {'Threshold':<10} {'F1':<8} {'Acc':<8} {'Prec':<8} {'Recall':<8}")
+    """Deprecated select_best_results stub.
+
+    This module used to select the best threshold per model/split, producing
+    `best_results_summary.json`. That behavior is deprecated because it re-derived
+    thresholds and caused inconsistencies. The visualizer now trusts each
+    performance JSON's `metadata.threshold` (fallback 0.5).
+
+    This file is intentionally a no-op to avoid accidental execution.
+    """
+
+    from pathlib import Path
+
+    def main():
+        print("[SKIP] select_best_results is deprecated and intentionally disabled.")
+        return 0
+
+    if __name__ == '__main__':
+        main()
     print("-" * 80)
     
     for (model, split), data in sorted(best_results.items()):
