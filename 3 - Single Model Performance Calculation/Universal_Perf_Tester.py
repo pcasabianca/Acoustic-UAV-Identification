@@ -143,7 +143,9 @@ def main():
         """
         jsonl_path = Path(jsonl_path)
         if not jsonl_path.exists():
-            raise RuntimeError(f"Metadata JSONL manquant: {jsonl_path}")
+            # Return empty mapping to allow caller to synthesize metadata when
+            # no JSONL is present (backwards-compatible behaviour)
+            return {}
 
         mapping = {}
         with jsonl_path.open('r', encoding='utf-8') as fh:
@@ -157,49 +159,120 @@ def main():
                     # skip malformed lines
                     continue
 
-                meta = obj.get('train_meta') or obj.get('meta') or obj.get('info') or {}
-                debug = obj.get('debug_meta') or obj.get('debug') or {}
+                # Backwards-compatible: detect old envelope format (meta/debug)
+                if any(k in obj for k in ('meta', 'train_meta', 'debug', 'debug_meta', 'info')):
+                    meta = obj.get('train_meta') or obj.get('meta') or obj.get('info') or {}
+                    debug = obj.get('debug_meta') or obj.get('debug') or {}
+                else:
+                    # New dataset format: top-level fields like 'path', 'label', 'scenario', 'sources', 'audio'
+                    meta = {}
+                    debug = {}
+                    # filename/path
+                    if 'path' in obj and obj.get('path'):
+                        meta['filename'] = obj.get('path')
+                    elif 'file' in obj and obj.get('file'):
+                        meta['filename'] = obj.get('file')
+                    elif 'audio_filepath' in obj and obj.get('audio_filepath'):
+                        meta['filename'] = obj.get('audio_filepath')
 
-                filename = meta.get('filename') or meta.get('file') or meta.get('audio_filepath')
+                    # label & scenario
+                    if 'label' in obj:
+                        meta['label'] = obj.get('label')
+                    if 'scenario' in obj:
+                        meta['scenario'] = obj.get('scenario')
+                    if 'class_name' in obj:
+                        meta['class_name'] = obj.get('class_name')
+
+                    # expose raw sources under debug for downstream heuristics
+                    if 'sources' in obj:
+                        debug['sources'] = obj.get('sources')
+                    # preserve any mix/debug details if present
+                    if 'debug' in obj:
+                        debug.update(obj.get('debug') or {})
+
+                # Determine filename/key used to index this entry
+                filename = None
+                if isinstance(meta, dict):
+                    filename = meta.get('filename') or meta.get('file') or meta.get('audio_filepath')
+
+                if not filename:
+                    # try top-level fallbacks
+                    filename = obj.get('path') or obj.get('file') or obj.get('audio_filepath')
+
                 if not filename:
                     # cannot map this JSONL entry to a file
                     continue
 
-                # Minimal normalized metadata we keep
+                # Normalize minimal entry structure (keep compatibility with rest of code)
                 entry = {
-                    'raw_meta': meta,
-                    'raw_debug': debug,
-                    'label': int(meta['label']) if 'label' in meta and meta['label'] is not None else None,
-                    'class_name': meta.get('class_name') or meta.get('class'),
-                    'scenario': meta.get('scenario'),
+                    'raw_meta': meta if isinstance(meta, dict) else {},
+                    'raw_debug': debug if isinstance(debug, dict) else {},
+                    'label': int(meta['label']) if isinstance(meta, dict) and 'label' in meta and meta['label'] is not None else (int(obj['label']) if 'label' in obj and obj['label'] is not None else None),
+                    'class_name': (meta.get('class_name') if isinstance(meta, dict) and meta.get('class_name') else (None)),
+                    'scenario': (meta.get('scenario') if isinstance(meta, dict) and meta.get('scenario') else (obj.get('scenario') if 'scenario' in obj else None)),
                 }
 
-                # try extract distance if present in debug.mix_details (do NOT infer from filename)
+                # Extract distance from any available debug/mix fields or sources
                 distance = None
-                for md in (debug.get('mix_details') or []) or []:
+                # check explicit mix_details first
+                for md in (entry['raw_debug'].get('mix_details') or []) or []:
                     if isinstance(md, dict) and 'requested_distance_m' in md:
                         try:
                             distance = float(md.get('requested_distance_m'))
                             break
                         except Exception:
                             pass
+
+                # then inspect sources for possible distance fields
+                if distance is None:
+                    for s in (entry['raw_debug'].get('sources') or []) or []:
+                        if isinstance(s, dict):
+                            if 'requested_distance_m' in s:
+                                try:
+                                    distance = float(s.get('requested_distance_m'))
+                                    break
+                                except Exception:
+                                    pass
+                            if 'distance_m' in s:
+                                try:
+                                    distance = float(s.get('distance_m'))
+                                    break
+                                except Exception:
+                                    pass
+
                 entry['distance_m'] = distance
 
-                # Deterministic derivation of `scenario` when missing from dataset JSONL.
-                # Priority:
-                # 1. dataset-provided `scenario`
-                # 2. derive from `debug_meta.offline_source`: dads_0_* -> orig_ambient, dads_1_* -> orig_drone
-                # 3. derive from extracted `distance_m` (e.g., '500m') when class indicates drone
-                # 4. leave as None (strict callers will fail if they require it)
+                # Derive scenario when missing using conservative heuristics based on sources
                 if not entry.get('scenario'):
                     derived = None
                     try:
-                        offline = debug.get('offline_source') if isinstance(debug, dict) else None
-                        if isinstance(offline, str):
-                            if offline.startswith('dads_0_'):
-                                derived = 'orig_ambient'
-                            elif offline.startswith('dads_1_'):
-                                derived = 'orig_drone'
+                        sources = entry['raw_debug'].get('sources') or []
+                        roles = set()
+                        for s in sources:
+                            try:
+                                r = s.get('role')
+                                if r:
+                                    roles.add(r)
+                            except Exception:
+                                pass
+
+                        if roles == {'ambient'}:
+                            derived = 'ambient_only'
+                        elif 'drone' in roles and 'ambient' in roles:
+                            derived = 'drone_plus_ambient'
+                        elif 'drone' in roles:
+                            derived = 'drone_only'
+                        else:
+                            # fallback: try to derive from offline source path
+                            offline = None
+                            first_src = sources[0] if sources else None
+                            if isinstance(first_src, dict):
+                                offline = first_src.get('source_path')
+                            if isinstance(offline, str):
+                                if 'dads_0_' in offline:
+                                    derived = 'orig_ambient'
+                                elif 'dads_1_' in offline:
+                                    derived = 'orig_drone'
                     except Exception:
                         derived = None
 
@@ -214,16 +287,13 @@ def main():
                         entry['scenario'] = derived
 
                 # Index mapping by the filename recorded in the JSONL and also by its basename.
-                # Many dataset JSONL store filenames with a subdirectory prefix (e.g. "0/dads_sample_..")
-                # while code that enumerates WAV files uses bare basenames. Index both forms
-                # deterministically from the JSONL content (no heuristics based on WAV names).
-                mapping[filename] = entry
+                mapping_key = filename
+                mapping[mapping_key] = entry
                 try:
                     base = Path(filename).name
                     if base and base != filename:
                         mapping[base] = entry
                 except Exception:
-                    # if Path parsing fails for any reason, skip adding basename index
                     pass
 
         return mapping
@@ -281,8 +351,18 @@ def main():
 
     X_batch = np.stack(X_list, axis=0)
 
-    # Load metadata JSONL for this split (strict, no filename heuristics)
-    metadata_path = dataset_dir / 'augmentation_samples.jsonl'
+    # Load metadata JSONL for this split (prefer new `metadata.jsonl`, fall back)
+    candidates = ['metadata.jsonl', 'augmentation_samples.jsonl']
+    metadata_path = None
+    for c in candidates:
+        p = dataset_dir / c
+        if p.exists():
+            metadata_path = p
+            break
+    if metadata_path is None:
+        # prefer the new canonical name for synthesis/writing
+        metadata_path = dataset_dir / 'metadata.jsonl'
+
     metadata_map = load_metadata_jsonl(metadata_path)
     # Ensure metadata exists for all files
     missing_meta = [f for f in filenames if f not in metadata_map]
@@ -360,7 +440,7 @@ def main():
 
     # Predict in batches
     batch_size = getattr(config, 'BATCH_SIZE', 32)
-    preds = model.predict(X_batch, batch_size=batch_size, verbose=1)
+    preds = model.predict(X_batch, batch_size=batch_size, verbose=0)
 
     # Convert model outputs to probabilities for class 1
     if preds.ndim > 1 and preds.shape[1] > 1:

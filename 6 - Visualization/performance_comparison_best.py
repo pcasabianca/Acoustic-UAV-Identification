@@ -208,15 +208,20 @@ def plot_subcategory_heatmap(results, output_dir):
     if not test_results:
         return
     
-    # Require explicit `scenario` in each prediction's canonical raw_meta.
+    # Require explicit `scenario` in each prediction's metadata.
     scenario_set = set()
     missing = []
     for data in test_results.values():
         for p in data.get('predictions', []):
-            raw_meta = p.get('metadata', {}).get('raw_meta', {})
-            sc = raw_meta.get('scenario') if isinstance(raw_meta, dict) else None
+            meta = p.get('metadata', {}) or {}
+            # scenario may be stored at top-level metadata['scenario'] or under raw_meta.scenario
+            sc = None
+            if isinstance(meta, dict):
+                sc = (meta.get('scenario') or (meta.get('raw_meta') or {}).get('scenario'))
             if not sc:
-                missing.append(p.get('filename', '<no-fname>'))
+                # prefer path for examples if available
+                fname = (meta.get('path') or (meta.get('raw_meta') or {}).get('filename') or p.get('filename') or '<no-fname>')
+                missing.append(fname)
             else:
                 scenario_set.add(sc)
 
@@ -252,11 +257,13 @@ def plot_subcategory_heatmap(results, output_dir):
         key = [k for k in test_results.keys() if k[0] == model][0]
         data = test_results[key]
 
-        # Aggregate by scenario from predictions using `raw_meta.scenario` (strict)
+        # Aggregate by scenario from predictions using canonical top-level metadata first,
+        # then fall back to raw_meta (but prefer canonical as produced by the tester/worker).
         counts = {s: {'correct': 0, 'total': 0} for s in all_subcats}
         for p in data.get('predictions', []):
-            raw_meta = p.get('metadata', {}).get('raw_meta', {})
-            sc = raw_meta.get('scenario') if isinstance(raw_meta, dict) else None
+            meta = p.get('metadata', {}) or {}
+            raw_meta = meta.get('raw_meta') or {}
+            sc = meta.get('scenario') or (raw_meta.get('scenario') if isinstance(raw_meta, dict) else None)
             if sc in counts:
                 counts[sc]['total'] += 1
                 if p.get('true_label') == p.get('pred_label'):
@@ -277,18 +284,19 @@ def plot_subcategory_heatmap(results, output_dir):
     missing_snr = []
     for data in test_results.values():
         for p in data.get('predictions', []):
-            raw_meta = p.get('metadata', {}).get('raw_meta', {})
-            raw_debug = p.get('metadata', {}).get('raw_debug', {})
-            if not isinstance(raw_meta, dict):
-                continue
-            fname = raw_meta.get('filename') or p.get('filename')
+            meta = p.get('metadata', {}) or {}
+            raw_meta = (meta.get('raw_meta') or {}) if isinstance(meta, dict) else {}
+            raw_debug = (meta.get('raw_debug') or {}) if isinstance(meta, dict) else {}
+            # determine filename/path used for deduplication
+            fname = raw_meta.get('filename') or meta.get('path') or raw_meta.get('path') or p.get('filename')
             if not fname or fname in seen_files:
                 continue
             seen_files.add(fname)
-            sc = raw_meta.get('scenario')
+            # scenario may appear at metadata['scenario'] or raw_meta['scenario']
+            sc = meta.get('scenario') or raw_meta.get('scenario')
             if sc not in scenario_snrs:
                 continue
-            # Require resulting_snr_db to be present
+            # Require resulting_snr_db to be present in raw_debug
             if not isinstance(raw_debug, dict) or 'resulting_snr_db' not in raw_debug:
                 missing_snr.append(fname)
                 continue
@@ -320,35 +328,27 @@ def plot_subcategory_heatmap(results, output_dir):
     seen = set()
     for data in test_results.values():
         for p in data.get('predictions', []):
-            raw_meta = p.get('metadata', {}).get('raw_meta', {})
-            if not isinstance(raw_meta, dict):
-                continue
-            fname = raw_meta.get('filename') or p.get('filename')
+            meta = p.get('metadata', {}) or {}
+            raw_meta = (meta.get('raw_meta') or {}) if isinstance(meta, dict) else {}
+            fname = raw_meta.get('filename') or meta.get('path') or raw_meta.get('path') or p.get('filename')
             if not fname or fname in seen:
                 continue
             seen.add(fname)
-            sc = raw_meta.get('scenario')
+            sc = meta.get('scenario') or raw_meta.get('scenario')
             if sc not in scenario_class_counts:
                 continue
-            cls = raw_meta.get('class_name') if 'class_name' in raw_meta else raw_meta.get('label')
+            # Use only the explicit numeric label field (do not rely on class_name)
+            cls = raw_meta.get('label') if 'label' in raw_meta else meta.get('label')
             if cls is None:
                 raise RuntimeError(f"Missing class label for file {fname}")
-            if isinstance(cls, str):
-                cls_norm = cls.lower()
-                if cls_norm in ('no_drone', 'class_0', '0', 'ambient'):
-                    scenario_class_counts[sc]['class_0'] += 1
-                elif cls_norm in ('drone', 'class_1', '1'):
-                    scenario_class_counts[sc]['class_1'] += 1
-                else:
-                    raise RuntimeError(f"Unrecognized class label '{cls}' for file {fname}")
+            try:
+                ival = int(cls)
+            except Exception:
+                raise RuntimeError(f"Unrecognized class label '{cls}' for file {fname}")
+            if ival == 0:
+                scenario_class_counts[sc]['class_0'] += 1
             else:
-                try:
-                    if int(cls) == 0:
-                        scenario_class_counts[sc]['class_0'] += 1
-                    else:
-                        scenario_class_counts[sc]['class_1'] += 1
-                except Exception:
-                    raise RuntimeError(f"Unrecognized class label '{cls}' for file {fname}")
+                scenario_class_counts[sc]['class_1'] += 1
 
     # Decide majority class per scenario and group
     class0 = []
@@ -367,15 +367,7 @@ def plot_subcategory_heatmap(results, output_dir):
         examples = ', '.join([f"{t[0]}({t[1]} vs {t[2]})" for t in ties[:12]])
         raise RuntimeError(f"Tie or no majority class for scenarios: {examples}")
 
-    # Detect scenarios that contain only a single class (these produce misleading accuracies)
-    single_class_scenarios = [s for s in all_subcats if (scenario_class_counts[s]['class_0'] == 0 or scenario_class_counts[s]['class_1'] == 0)]
-    single_class_flag = set(single_class_scenarios)
-    if single_class_scenarios:
-        print(f"  ⚠ Single-class scenarios detected (marked with '*' in heatmap labels): {single_class_scenarios}")
-        # NOTE: do not blank these columns entirely — instead mark them in the x-tick labels
-        # so the user can still inspect per-model accuracy for that scenario while being
-        # warned that the column contains samples of only one class (so accuracy may be
-        # trivially high and should be interpreted accordingly).
+    # Note: do not warn about single-class scenarios here; keep heatmap columns visible.
 
     # Keep original ordering reference for indexing later
     orig_all_subcats = list(all_subcats)
@@ -385,11 +377,7 @@ def plot_subcategory_heatmap(results, output_dir):
     class1_sorted = sorted(class1, key=lambda x: scenario_snr_mean.get(x, float('nan')))
     ordered_all_subcats = class0_sorted + class1_sorted
 
-    # Keep single-class scenarios visible but clearly marked. Single-class
-    # columns are often trivially perfect; annotate them with '*' so the
-    # user can inspect them while being warned about their single-class nature.
-    if single_class_scenarios:
-        print(f"  ⚠ Single-class scenarios detected (marked with '*' in heatmap labels): {single_class_scenarios}")
+    # Keep single-class scenarios visible without special marking.
 
     def _snr_label(s):
         v = scenario_snr_mean.get(s, float('nan'))
@@ -398,8 +386,7 @@ def plot_subcategory_heatmap(results, output_dir):
             snr_part = 'n/a'
         else:
             snr_part = f"{v:.1f} dB"
-        mark = ' *' if s in single_class_flag else ''
-        return f"{s}{mark}\n{snr_part}"
+        return f"{s}\n{snr_part}"
 
     # Build xtick labels that include mean SNR per scenario in the new order
     xtick_labels = [_snr_label(s) for s in ordered_all_subcats]
@@ -423,6 +410,170 @@ def plot_subcategory_heatmap(results, output_dir):
     print(f"  ✓ Saved: {output_path}")
     plt.close()
 
+
+def plot_subcategory_heatmap_all(results_all, output_dir):
+    """Heatmap aggregated across all splits and all performance JSONs.
+    This builds per-model accuracy per scenario using all available predictions,
+    deduplicating by filename per model to avoid double-counting.
+    """
+    # Collect scenario set from all results
+    scenario_set = set()
+    for data in results_all.values():
+        for p in data.get('predictions', []):
+            meta = p.get('metadata', {}) or {}
+            sc = meta.get('scenario') or (meta.get('raw_meta') or {}).get('scenario')
+            if sc:
+                scenario_set.add(sc)
+
+    if not scenario_set:
+        print("  ⚠ No scenarios found in all-results; skipping all-splits heatmap")
+        return
+
+    all_subcats = sorted(list(scenario_set))
+    import re
+    def extract_distance(s):
+        match = re.search(r'(\d+)m', s)
+        return int(match.group(1)) if match else None
+    distances = [s for s in all_subcats if extract_distance(s) is not None]
+    others = [s for s in all_subcats if extract_distance(s) is None]
+    distances_sorted = sorted(distances, key=lambda x: extract_distance(x), reverse=True)
+    all_subcats = distances_sorted + sorted(others)
+
+    models = sorted(list({k[0] for k in results_all.keys()}))
+
+    accuracy_matrix = np.full((len(models), len(all_subcats)), np.nan)
+
+    for i, model in enumerate(models):
+        # aggregate across all entries for this model
+        counts = {s: {'correct': 0, 'total': 0} for s in all_subcats}
+        seen_files = set()
+        for key, data in results_all.items():
+            if key[0] != model:
+                continue
+            for p in data.get('predictions', []):
+                meta = p.get('metadata', {}) or {}
+                raw_meta = meta.get('raw_meta') or {}
+                fname = meta.get('path') or raw_meta.get('filename') or p.get('filename')
+                if not fname or fname in seen_files:
+                    continue
+                seen_files.add(fname)
+                sc = meta.get('scenario') or raw_meta.get('scenario')
+                if sc in counts:
+                    counts[sc]['total'] += 1
+                    if p.get('true_label') == p.get('pred_label'):
+                        counts[sc]['correct'] += 1
+
+        for j, subcat in enumerate(all_subcats):
+            cnt = counts.get(subcat, {})
+            if cnt.get('total', 0) > 0:
+                accuracy_matrix[i, j] = cnt['correct'] / cnt['total']
+            else:
+                accuracy_matrix[i, j] = np.nan
+
+    # compute mean SNR per scenario across all_results
+    scenario_snrs = {s: [] for s in all_subcats}
+    seen = set()
+    missing_snr = []
+    for data in results_all.values():
+        for p in data.get('predictions', []):
+            meta = p.get('metadata', {}) or {}
+            raw_meta = meta.get('raw_meta') or {}
+            raw_debug = meta.get('raw_debug') or {}
+            fname = raw_meta.get('filename') or meta.get('path') or raw_meta.get('path') or p.get('filename')
+            if not fname or fname in seen:
+                continue
+            seen.add(fname)
+            sc = meta.get('scenario') or raw_meta.get('scenario')
+            if sc not in scenario_snrs:
+                continue
+            if not isinstance(raw_debug, dict) or 'resulting_snr_db' not in raw_debug:
+                missing_snr.append(fname)
+                continue
+            try:
+                snr_val = float(raw_debug.get('resulting_snr_db'))
+            except Exception:
+                missing_snr.append(fname)
+                continue
+            scenario_snrs[sc].append(snr_val)
+
+    if missing_snr:
+        # do not fail the entire pipeline for missing SNR in all-splits heatmap; warn and proceed
+        print(f"  ⚠ Missing resulting_snr_db for {len(missing_snr)} files; continuing without those values")
+
+    scenario_snr_mean = {s: (np.mean(scenario_snrs[s]) if len(scenario_snrs[s])>0 else float('nan')) for s in all_subcats}
+
+    fig, ax = plt.subplots(figsize=(max(14, len(all_subcats) * 0.8), max(8, len(models) * 0.6)))
+    valid_data = accuracy_matrix[~np.isnan(accuracy_matrix)]
+    vmin_dynamic = valid_data.min() if len(valid_data) > 0 else 0
+    vmax_dynamic = valid_data.max() if len(valid_data) > 0 else 1
+
+    # decide majority class per scenario across all_results
+    scenario_class_counts = {s: {'class_0': 0, 'class_1': 0} for s in all_subcats}
+    seen_files = set()
+    for data in results_all.values():
+        for p in data.get('predictions', []):
+            meta = p.get('metadata', {}) or {}
+            raw_meta = meta.get('raw_meta') or {}
+            fname = raw_meta.get('filename') or meta.get('path') or raw_meta.get('path') or p.get('filename')
+            if not fname or fname in seen_files:
+                continue
+            seen_files.add(fname)
+            sc = meta.get('scenario') or raw_meta.get('scenario')
+            if sc not in scenario_class_counts:
+                continue
+            cls = raw_meta.get('label') if 'label' in raw_meta else meta.get('label')
+            if cls is None:
+                continue
+            try:
+                ival = int(cls)
+            except Exception:
+                continue
+            if ival == 0:
+                scenario_class_counts[sc]['class_0'] += 1
+            else:
+                scenario_class_counts[sc]['class_1'] += 1
+
+    # decide ordering as before
+    class0 = []
+    class1 = []
+    for s in all_subcats:
+        c0 = scenario_class_counts[s]['class_0']
+        c1 = scenario_class_counts[s]['class_1']
+        if c0 > c1:
+            class0.append(s)
+        else:
+            class1.append(s)
+
+    class0_sorted = sorted(class0, key=lambda x: scenario_snr_mean.get(x, float('nan')))
+    class1_sorted = sorted(class1, key=lambda x: scenario_snr_mean.get(x, float('nan')))
+    ordered_all_subcats = class0_sorted + class1_sorted
+
+    def _snr_label(s):
+        v = scenario_snr_mean.get(s, float('nan'))
+        if v != v:
+            snr_part = 'n/a'
+        else:
+            snr_part = f"{v:.1f} dB"
+        return f"{s}\n{snr_part}"
+
+    xtick_labels = [_snr_label(s) for s in ordered_all_subcats]
+    orig_all_subcats = list(all_subcats)
+    col_idx = [orig_all_subcats.index(s) for s in ordered_all_subcats]
+    accuracy_matrix_reordered = accuracy_matrix[:, col_idx]
+
+    sns.heatmap(accuracy_matrix_reordered, annot=True, fmt='.3f', cmap='RdYlGn', ax=ax,
+               xticklabels=xtick_labels, yticklabels=models, cbar_kws={'label': 'Accuracy'},
+               vmin=vmin_dynamic, vmax=vmax_dynamic, linewidths=0.5, linecolor='gray')
+    ax.set_title('Accuracy Heatmap by Subcategory (All Splits)', fontweight='bold', fontsize=14)
+    ax.set_xlabel('Subcategory', fontweight='bold')
+    ax.set_ylabel('Model', fontweight='bold')
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    output_path = output_dir / 'best_subcategory_heatmap_all_splits.png'
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f"  ✓ Saved: {output_path}")
+    plt.close()
+
 def load_results(folder):
     """
     Charge les résultats de performance depuis le dossier spécifié.
@@ -434,6 +585,51 @@ def load_results(folder):
 
     results = {}
     for json_path in sorted(perf_dir.glob("*_test.json")):
+        try:
+            with open(json_path, 'r') as f:
+                full_data = json.load(f)
+
+            # Minimal validation
+            for tk in ('metadata', 'global_metrics', 'class_metrics', 'predictions'):
+                if tk not in full_data:
+                    print(f"  ✗ {json_path.name} missing key: {tk}")
+                    raise RuntimeError(f"Invalid performance file: {json_path.name}")
+
+            meta = full_data.get('metadata', {})
+            model = meta.get('model')
+            split = meta.get('split')
+            if model is None or split is None:
+                print(f"  ✗ {json_path.name} missing metadata.model or metadata.split")
+                continue
+
+            file_threshold = meta.get('threshold')
+            if file_threshold is None:
+                print(f"  ✗ {json_path.name} missing metadata.threshold — produced JSONs must include this field")
+                raise RuntimeError(f"Missing metadata.threshold in {json_path.name}")
+
+            key_tuple = (model, split, float(file_threshold))
+            results[key_tuple] = full_data
+            print(f"  ✓ Loaded: {model} | {split} | t={float(file_threshold):.3f}")
+
+        except Exception as e:
+            print(f"  ✗ Error loading {json_path.name}: {e}")
+
+    if not results:
+        print("[WARN] No valid performance JSONs loaded from PERFORMANCE_DIR")
+    return results
+
+
+def load_all_results(folder):
+    """
+    Load all performance JSONs (all splits) from `folder` and return a dict keyed by (model, split, threshold).
+    """
+    perf_dir = Path(folder)
+    if not perf_dir.exists():
+        print(f"[ERROR] Performance directory not found: {perf_dir}")
+        return {}
+
+    results = {}
+    for json_path in sorted(perf_dir.glob("*.json")):
         try:
             with open(json_path, 'r') as f:
                 full_data = json.load(f)
@@ -487,6 +683,14 @@ def main():
     
     print("\n[5/5] Plotting subcategory heatmap...")
     plot_subcategory_heatmap(results, OUTPUT_DIR)
+    # Also generate heatmap aggregated across all splits
+    try:
+        all_results = load_all_results(config.PERFORMANCE_DIR)
+        if all_results:
+            print("\n[6/5] Plotting subcategory heatmap (all splits)...")
+            plot_subcategory_heatmap_all(all_results, OUTPUT_DIR)
+    except Exception:
+        pass
     
     print("\n" + "=" * 80)
     print(f"✓ All visualizations saved to: {OUTPUT_DIR}")

@@ -82,15 +82,34 @@ def process_shard(tasks, dataset_dir, shard_path, audio_cfg, mix_cfg):
             }
             # attach SNR metadata when available
             if snr_est_db is not None:
+                # preserve legacy top-level fields
                 meta["snr_est_db"] = float(snr_est_db)
                 meta["rms_drone"] = float(rms_drone)
                 meta["rms_ambient"] = float(rms_ambient)
-                # also copy into components where relevant
-                for c in meta["sources"]:
-                    if c.get("role") == 'drone':
-                        c.setdefault("rms_drone", float(rms_drone))
-                    if c.get("role") == 'ambient':
-                        c.setdefault("rms_ambient", float(rms_ambient))
+                # compute per-drone RMS values when individual arrays are available
+                drone_rms_list = []
+                if 'drone' in role_parts:
+                    for arr in role_parts['drone']:
+                        drone_rms_list.append(_rms_arr(arr))
+                # build a debug dict containing the canonical resulting_snr_db key
+                debug = {
+                    'resulting_snr_db': float(snr_est_db),
+                    'resulting_snr_db_per_drone': [float(v) for v in drone_rms_list],
+                    'rms_drone': float(rms_drone),
+                    'rms_ambient': float(rms_ambient)
+                }
+                meta['debug'] = debug
+                # also annotate individual source entries with per-source RMS when possible
+                for idx, c in enumerate(meta["sources"]):
+                    role = c.get("role")
+                    if role == 'drone':
+                        # try to map drone sources to drone_rms_list by order
+                        try:
+                            c.setdefault('rms', float(drone_rms_list.pop(0)))
+                        except Exception:
+                            c.setdefault('rms', float(rms_drone))
+                    elif role == 'ambient':
+                        c.setdefault('rms', float(rms_ambient))
             out.write(json.dumps(meta) + "\n")
             # progress update
             processed += 1

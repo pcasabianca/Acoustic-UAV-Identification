@@ -58,58 +58,88 @@ def analyze_split(split_dir, split_name):
 
     missing_meta_examples = []
 
+    # Build canonical dataset index (filename -> canonical metadata) from dataset metadata.jsonl files
+    dataset_index = {}
+    for sd, name in [(config.DATASET_TRAIN_DIR, 'train'), (config.DATASET_VAL_DIR, 'val'), (config.DATASET_TEST_DIR, 'test')]:
+        md_path = Path(sd) / 'metadata.jsonl'
+        if not md_path.exists():
+            continue
+        try:
+            with open(md_path, 'r') as mf:
+                for line in mf:
+                    if not line.strip():
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except Exception:
+                        continue
+                    entry_path = entry.get('path') or entry.get('filename')
+                    if not entry_path:
+                        continue
+                    b = Path(entry_path).name
+                    # store canonical metadata and the split it belongs to
+                    dataset_index[b] = {'entry': entry, 'split': name}
+        except Exception:
+            continue
+
     for j in perf_dir.glob('*.json'):
         try:
             with open(j, 'r') as f:
                 data = json.load(f)
         except Exception:
             continue
-
         for p in data.get('predictions', []):
-            meta = p.get('metadata')
-            if not meta or not isinstance(meta, dict):
+            # Prediction-level metadata may be incomplete; use canonical dataset metadata.jsonl as source-of-truth
+            meta = p.get('metadata') or {}
+            if not isinstance(meta, dict):
                 missing_meta_examples.append({'file': j.name, 'prediction': p.get('filename', '<no-fname>')})
                 continue
 
-            raw_meta = meta.get('raw_meta')
+            fname = meta.get('path') or p.get('filename')
+            if not fname:
+                missing_meta_examples.append({'file': j.name, 'prediction': p.get('filename', '<no-fname>')})
+                continue
+            bname = Path(fname).name
 
-            # Strict requirements: require raw_meta with filename/label/split.
-            # Do NOT require raw_debug here; the heatmap code does not enforce it and
-            # scenarios should be derived from raw_meta only.
-            if not raw_meta or 'filename' not in raw_meta or 'label' not in raw_meta or 'split' not in raw_meta:
-                missing_meta_examples.append({'file': j.name, 'prediction': raw_meta.get('filename') if raw_meta else '<no-raw_meta>'})
+            # Look up canonical entry from dataset metadata
+            canonical = dataset_index.get(bname)
+            if not canonical:
+                missing_meta_examples.append({'file': j.name, 'prediction': bname})
+                continue
+            canonical_entry = canonical.get('entry', {})
+            canonical_split = canonical.get('split')
+
+            # Only count if this file belongs to the split being analyzed
+            if canonical_split != split_name:
                 continue
 
-            split_val = raw_meta['split']
-            fname = raw_meta.get('filename')
             # Deduplicate by filename within this split
-            if fname in seen_files[split_val]:
+            if bname in seen_files[split_name]:
                 continue
-            seen_files[split_val].add(fname)
+            seen_files[split_name].add(bname)
 
-            counts_by_split[split_val]['total'] += 1
-            class_name = raw_meta.get('class_name') or str(raw_meta.get('label'))
-            if class_name in ('no_drone', 'class_0', 0, '0'):
-                counts_by_split[split_val]['class_0'] += 1
-            elif class_name in ('drone', 'class_1', 1, '1'):
-                counts_by_split[split_val]['class_1'] += 1
-            else:
-                # Count based on label value as fallback
-                try:
-                    if int(raw_meta.get('label')) == 0:
-                        counts_by_split[split_val]['class_0'] += 1
-                    else:
-                        counts_by_split[split_val]['class_1'] += 1
-                except Exception:
-                    missing_meta_examples.append({'file': j.name, 'prediction': raw_meta.get('filename')})
-                    continue
+            counts_by_split[split_name]['total'] += 1
 
-            # Use canonical scenario name from raw_meta.scenario. Fail if missing.
-            scenario = raw_meta.get('scenario')
-            if not scenario:
-                missing_meta_examples.append({'file': j.name, 'prediction': raw_meta.get('filename'), 'reason': 'missing scenario in raw_meta'})
+            # Determine label and scenario from canonical entry (preferred) or prediction metadata
+            label_val = meta.get('label') if 'label' in meta else canonical_entry.get('label')
+            scenario = meta.get('scenario') if 'scenario' in meta else canonical_entry.get('scenario')
+
+            # Validate required fields
+            if label_val is None or not scenario:
+                missing_meta_examples.append({'file': j.name, 'prediction': bname})
+                continue
+
+            try:
+                ival = int(label_val)
+            except Exception:
+                missing_meta_examples.append({'file': j.name, 'prediction': bname})
+                continue
+            if ival == 0:
+                counts_by_split[split_name]['class_0'] += 1
             else:
-                counts_by_split[split_val]['subcategories'][scenario] += 1
+                counts_by_split[split_name]['class_1'] += 1
+
+            counts_by_split[split_name]['subcategories'][scenario] += 1
 
     if missing_meta_examples:
         msg = 'Missing or incomplete per-file metadata in performance JSONs.\nShow examples: '
@@ -198,7 +228,8 @@ def plot_subcategory_distribution(all_stats, output_dir):
             print("  ⚠ Could not import performance_comparison_best; skipping subcategory plots")
             return
 
-    results = pcb.load_best_results()
+    # Use load_results (no "best" selection) to obtain all performance JSONs
+    results = pcb.load_results(config.PERFORMANCE_DIR)
     if not results:
         print("  ⚠ No best results available; skipping subcategory plots")
         return
@@ -209,15 +240,15 @@ def plot_subcategory_distribution(all_stats, output_dir):
     missing_scenarios = []
     for data in results.values():
         for p in data.get('predictions', []):
-            raw_meta = p.get('metadata', {}).get('raw_meta', {})
-            if not isinstance(raw_meta, dict):
+            meta = p.get('metadata', {}) or {}
+            if not isinstance(meta, dict):
                 missing_scenarios.append(p.get('filename', '<no-fname>'))
                 continue
-            sc = raw_meta.get('scenario')
+            sc = meta.get('scenario')
             if sc:
                 scenario_set.add(sc)
             else:
-                missing_scenarios.append(raw_meta.get('filename', '<no-fname>'))
+                missing_scenarios.append(p.get('filename', '<no-fname>'))
 
     if missing_scenarios:
         examples = list(dict.fromkeys(missing_scenarios))[:12]
@@ -242,14 +273,14 @@ def plot_subcategory_distribution(all_stats, output_dir):
     subcat_counts = defaultdict(int)
     for data in results.values():
         for p in data.get('predictions', []):
-            raw_meta = p.get('metadata', {}).get('raw_meta', {})
-            if not isinstance(raw_meta, dict):
+            meta = p.get('metadata', {}) or {}
+            if not isinstance(meta, dict):
                 continue
-            fname = raw_meta.get('filename') or p.get('filename')
+            fname = meta.get('path') or p.get('filename')
             if not fname or fname in seen:
                 continue
             seen.add(fname)
-            sc = raw_meta.get('scenario')
+            sc = meta.get('scenario')
             if not sc:
                 # Should not happen due to earlier validation
                 raise RuntimeError(f"Missing scenario for file {fname} in best_results")
@@ -276,38 +307,28 @@ def plot_subcategory_distribution(all_stats, output_dir):
 
     for data in results.values():
         for p in data.get('predictions', []):
-            raw_meta = p.get('metadata', {}).get('raw_meta', {})
-            if not isinstance(raw_meta, dict):
+            meta = p.get('metadata', {}) or {}
+            if not isinstance(meta, dict):
                 continue
-            fname = raw_meta.get('filename') or p.get('filename')
+            fname = meta.get('path') or p.get('filename')
             if not fname or fname in seen_files:
                 continue
             seen_files.add(fname)
-            sc = raw_meta.get('scenario')
+            sc = meta.get('scenario')
             if sc not in scenario_class_counts:
                 # scenario outside the canonical set (shouldn't happen)
                 continue
-            # Determine class from metadata
-            cls = raw_meta.get('class_name') if 'class_name' in raw_meta else raw_meta.get('label')
+            # Determine class from metadata (canonical: numeric label at top-level)
+            cls = meta.get('label') if 'label' in meta else meta.get('class_name')
             if cls is None:
                 raise RuntimeError(f"Missing class label for file {fname}")
-            # Normalize
-            if isinstance(cls, str):
-                cls_norm = cls.lower()
-                if cls_norm in ('no_drone', 'class_0', '0', 'ambient'):
+            try:
+                if int(cls) == 0:
                     scenario_class_counts[sc]['class_0'] += 1
-                elif cls_norm in ('drone', 'class_1', '1'):
-                    scenario_class_counts[sc]['class_1'] += 1
                 else:
-                    raise RuntimeError(f"Unrecognized class label '{cls}' for file {fname}")
-            else:
-                try:
-                    if int(cls) == 0:
-                        scenario_class_counts[sc]['class_0'] += 1
-                    else:
-                        scenario_class_counts[sc]['class_1'] += 1
-                except Exception:
-                    raise RuntimeError(f"Unrecognized class label '{cls}' for file {fname}")
+                    scenario_class_counts[sc]['class_1'] += 1
+            except Exception:
+                raise RuntimeError(f"Unrecognized class label '{cls}' for file {fname}")
 
     # Now split scenarios by majority class (strict)
     drone_cats = {}

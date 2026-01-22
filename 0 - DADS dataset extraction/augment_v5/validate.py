@@ -192,9 +192,17 @@ def validate_distribution(root_dir, validate_cfg=None):
                 strong_noise += 1
             # collect snr bins for label1
             snr = None
+            # support legacy top-level 'snr_est_db' and new debug.resulting_snr_db
             if 'snr_est_db' in m:
                 try:
                     snr = float(m.get('snr_est_db'))
+                except Exception:
+                    snr = None
+            if snr is None:
+                dbg = m.get('debug') or {}
+                try:
+                    if 'resulting_snr_db' in dbg:
+                        snr = float(dbg.get('resulting_snr_db'))
                 except Exception:
                     snr = None
             if snr is not None:
