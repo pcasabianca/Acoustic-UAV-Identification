@@ -5,6 +5,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+# Ensure project root (parent of extraction dir) is on sys.path so config.py can be imported
+PROJECT_ROOT = ROOT.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(ROOT))
 
 from augment_v5 import builder

@@ -52,7 +52,7 @@ if V4_ACTIVE_DATASET_ID:
 AUGMENTATION_CONFIG = EXTRACTION_DIR / 'build_config.json'
 # Convenience config entries for augmentation entrypoint and config
 # AUGMENTATION_CONFIG points to the single source-of-truth build_config.json
-AUGMENTATION_WRAPPER = EXTRACTION_DIR / 'build_dataset_v4.py'
+AUGMENTATION_WRAPPER = EXTRACTION_DIR / 'build_dataset_v5.py'
 
 # Canonical pools used by augmentation (can be overridden via env vars)
 # Example: export NOISE_POOL_DIR=/mnt/pools/noise

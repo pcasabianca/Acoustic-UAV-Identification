@@ -61,11 +61,12 @@ def build_tasks(cfg, source_split, out_dir):
 
     allocations = {k: {"n_samples": v} for k, v in splits.items()}
 
-    # Precompute scenario weights separated by label (support targets quotas)
+    # Precompute scenario lists and weights separated by label
     label0_scenarios = [s for s in scenarios if int(s.get("label", 0)) == 0]
     label1_scenarios = [s for s in scenarios if int(s.get("label", 0)) == 1]
-    w0 = [s.get("weight", 1.0) for s in label0_scenarios]
-    w1 = [s.get("weight", 1.0) for s in label1_scenarios]
+    w0 = [float(s.get("weight", 1.0)) for s in label0_scenarios]
+    w1 = [float(s.get("weight", 1.0)) for s in label1_scenarios]
+    weights_all = [float(s.get("weight", 1.0)) for s in scenarios]
 
     # load source_index to map path->hash if available
     src_index_path = out_dir.parent / "source_index.json"
@@ -89,16 +90,36 @@ def build_tasks(cfg, source_split, out_dir):
 
         # Determine targets quotas if present
         targets = cfg.get("targets", {})
-        label0_ratio = float(targets.get("label0_ratio", 0.0))
-        # compute n0,n1 with rounding
-        n0 = int(round(n * label0_ratio)) if label0_ratio > 0 else 0
-        n1 = n - n0
+        label0_ratio = targets.get("label0_ratio", None)
 
-        # allocate per-scenario counts for label0 and label1 separately
-        per_scen = []
-        per_scen += _distribute_counts(n0, w0) if label0_scenarios else []
-        per_scen += _distribute_counts(n1, w1) if label1_scenarios else []
-        # per_scen now corresponds to label0_scenarios followed by label1_scenarios
+        # Allocation strategy (deterministic):
+        # 1) If targets.label0_ratio present -> enforce label quotas and distribute
+        # 2) Else if all scenario weights sum to ~1.0 -> treat weights as absolute
+        #    fractions of the full split (exact percentage semantics)
+        # 3) Otherwise -> allocate by label groups proportionally to their weights
+
+        eps = 1e-9
+        total_w_all = sum(weights_all)
+
+        if label0_ratio is not None:
+            label0_ratio = float(label0_ratio)
+            n0 = int(round(n * label0_ratio)) if label0_ratio > 0 else 0
+            n1 = n - n0
+            per_scen = []
+            per_scen += _distribute_counts(n0, w0) if label0_scenarios else []
+            per_scen += _distribute_counts(n1, w1) if label1_scenarios else []
+        elif abs(total_w_all - 1.0) < eps:
+            # weights provided are absolute fractions of the full split -> apply directly
+            per_scen = _distribute_counts(n, weights_all)
+            # per_scen corresponds to scenarios in original `scenarios` order
+        else:
+            # no explicit targets; compute group totals from weights and split deterministically
+            sum_w0 = sum(w0)
+            n0 = int(round(n * (sum_w0 / total_w_all))) if total_w_all > 0 else 0
+            n1 = n - n0
+            per_scen = []
+            per_scen += _distribute_counts(n0, w0) if label0_scenarios else []
+            per_scen += _distribute_counts(n1, w1) if label1_scenarios else []
 
         with tasks_path.open("w") as fh:
             idx = 0

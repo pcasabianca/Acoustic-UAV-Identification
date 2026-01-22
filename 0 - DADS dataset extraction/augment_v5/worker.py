@@ -1,4 +1,6 @@
 import json
+import time
+import math
 from pathlib import Path
 import numpy as np
 from .audio_utils_v5 import load_audio
@@ -16,8 +18,17 @@ def process_shard(tasks, dataset_dir, shard_path, audio_cfg, mix_cfg):
     sr = int(audio_cfg["sample_rate"])
     dur_s = float(audio_cfg["duration_s"])
     target_samples = int(sr * dur_s)
+    total = len(tasks)
+    # Prepare progress reporting every 5% (including 0%) with ETA
+    report_step = 5
+    next_report_pct = 0
+    processed = 0
+    start_t = time.time()
 
     with shard_path.open("w") as out:
+        # initial 0% report
+        if total > 0:
+            print(f"[PROGRESS] shard={shard_path.name} processed=0/{total} (0%) ETA=estimating", flush=True)
         for t in tasks:
             parts = []
             role_parts = {}
@@ -81,3 +92,22 @@ def process_shard(tasks, dataset_dir, shard_path, audio_cfg, mix_cfg):
                     if c.get("role") == 'ambient':
                         c.setdefault("rms_ambient", float(rms_ambient))
             out.write(json.dumps(meta) + "\n")
+            # progress update
+            processed += 1
+            if total > 0:
+                pct = int(math.floor((processed / total) * 100))
+                # report at each multiple of report_step (including 0 already printed)
+                if pct >= next_report_pct:
+                    now = time.time()
+                    elapsed = now - start_t
+                    avg = elapsed / processed if processed > 0 else 0
+                    remaining = max(0, total - processed)
+                    eta_sec = int(round(remaining * avg))
+                    # format ETA
+                    h = eta_sec // 3600
+                    m = (eta_sec % 3600) // 60
+                    s = eta_sec % 60
+                    eta_str = f"{h:02d}:{m:02d}:{s:02d}"
+                    print(f"[PROGRESS] shard={shard_path.name} processed={processed}/{total} ({pct}%) ETA={eta_str}", flush=True)
+                    # advance next_report_pct to the next multiple > pct
+                    next_report_pct = ((pct // report_step) + 1) * report_step

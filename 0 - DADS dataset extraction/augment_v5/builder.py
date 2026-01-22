@@ -7,15 +7,29 @@ from . import sources, allocator, worker, merge_metadata, validate
 
 
 def run(config_path, mode, jobs, clean):
-    cfg = json.loads(Path(config_path).read_text())
-    base = Path(config_path).resolve().parent
-    tmp = base / "tmp"
-    tmp.mkdir(exist_ok=True)
+    # Import config lazily to ensure PYTHONPATH has been set by caller
+    import sys
+    ROOT = Path(__file__).resolve().parents[1]
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    import config
 
-    # ensure output dirs
-    for s in ("dataset_train", "dataset_val", "dataset_test"):
-        (base / s / "0").mkdir(parents=True, exist_ok=True)
-        (base / s / "1").mkdir(parents=True, exist_ok=True)
+    cfg = json.loads(Path(config_path).read_text())
+    # Enforce authoritative paths from config.py (no fallbacks)
+    cfg.setdefault("sources", {})
+    cfg["sources"]["dads_root"] = str(Path(config.DATASET_DADS_OFFLINE_DIR))
+
+    base = Path(config.EXTRACTION_DIR)
+    tmp = base / "tmp"
+    tmp.mkdir(parents=True, exist_ok=True)
+
+    # ensure output dirs using config.py canonical locations
+    train_dir = Path(config.DATASET_TRAIN_DIR)
+    val_dir = Path(config.DATASET_VAL_DIR)
+    test_dir = Path(config.DATASET_TEST_DIR)
+    for d in (train_dir, val_dir, test_dir):
+        (d / "0").mkdir(parents=True, exist_ok=True)
+        (d / "1").mkdir(parents=True, exist_ok=True)
 
     # Clean outputs if requested (CLI --clean or config)
     # NOTE: don't perform automatic cleaning when running in `validate` mode
@@ -23,8 +37,7 @@ def run(config_path, mode, jobs, clean):
     if mode in ("full", "tasks", "gen"):
         should_clean = bool(clean) or bool(cfg.get("output", {}).get("clean_before_build", False))
     if should_clean:
-        for s in ("dataset_train", "dataset_val", "dataset_test"):
-            sd = base / s
+        for sd in (train_dir, val_dir, test_dir):
             if sd.exists():
                 for wav in sd.rglob("*.wav"):
                     try:
@@ -77,7 +90,13 @@ def run(config_path, mode, jobs, clean):
             procs = []
             for i, chunk in enumerate(chunks):
                 shard_path = shards_dir / f"{split}_meta_part_{i:03d}.jsonl"
-                p = mp.Process(target=worker.process_shard, args=(chunk, base / f"dataset_{split}", shard_path, cfg["audio"], cfg.get("mix", {})))
+                # map split name to canonical dataset dir from config.py
+                split_dir = {
+                    'train': train_dir,
+                    'val': val_dir,
+                    'test': test_dir
+                }.get(split, base / f"dataset_{split}")
+                p = mp.Process(target=worker.process_shard, args=(chunk, split_dir, shard_path, cfg["audio"], cfg.get("mix", {})))
                 p.start()
                 procs.append(p)
             for p in procs:
@@ -87,7 +106,9 @@ def run(config_path, mode, jobs, clean):
             if bad:
                 raise RuntimeError(f"One or more worker processes failed for split {split}")
 
-            merge_metadata.merge_split(split, shards_dir, base / f"dataset_{split}" / "metadata.jsonl")
+            out_meta = ({'train': train_dir, 'val': val_dir, 'test': test_dir}.get(split, base / f"dataset_{split}")) / "metadata.jsonl"
+            merge_metadata.merge_split(split, shards_dir, out_meta)
 
     if mode in ("full", "validate"):
-        validate.run_all_splits(base, cfg)
+        # validate against canonical extraction dir from config.py
+        validate.run_all_splits(Path(config.EXTRACTION_DIR), cfg)

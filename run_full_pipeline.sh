@@ -3,7 +3,7 @@
 # Acoustic UAV Detection - Complete Pipeline (v3.2)
 # 
 # Pipeline modernisé reflétant la nouvelle architecture:
-# 1. Préparation du dataset (master_setup_v2.py)
+# 1. Préparation du dataset (master_setup_v3.py)
 # 2. Extraction des features MEL (Mel_Preprocess_and_Feature_Extract.py)
 # 3. Entraînement des modèles (CNN, RNN, CRNN, ATTENTION_CRNN, EFFICIENTNET, MOBILENET, CONFORMER, TCN)
 # 4. Calibration des thresholds (calibrate_thresholds.py - multi-critères)
@@ -355,15 +355,15 @@ check_prerequisites() {
     # Check for GPU support
     check_gpu_support
     
-    if [ ! -f "$VENV_PATH" ]; then
-        log ERROR "Python venv not found: $VENV_PATH"
+    if [ ! -x "$VENV_PATH" ]; then
+        log ERROR "Python venv executable not found or not executable: $VENV_PATH"
         exit 1
     fi
     log SUCCESS "Python venv OK"
     
     # Verify critical scripts exist
     local required_scripts=(
-        "0 - DADS dataset extraction/master_setup_v2.py"
+        "0 - DADS dataset extraction/master_setup_v3.py"
         "1 - Preprocessing and Features Extraction/Mel_Preprocess_and_Feature_Extract.py"
         "2 - Model Training/CNN_Trainer.py"
         "2 - Model Training/RNN_Trainer.py"
@@ -395,10 +395,10 @@ prepare_dataset() {
     fi
     
     log STEP "STEP 1/5: Dataset Preparation"
-    log INFO "Running master_setup_v2.py..."
+    log INFO "Running master_setup_v3.py..."
     
     cd "$PROJECT_DIR/0 - DADS dataset extraction"
-    
+
     # Build augmentation args
     AUGMENT_ARGS=( )
     if [ -n "$AUGMENT_SAMPLES" ]; then
@@ -411,7 +411,19 @@ prepare_dataset() {
         AUGMENT_ARGS+=("--mid-scale")
     fi
 
-    if ! "$VENV_PATH" "master_setup_v2.py" "${AUGMENT_ARGS[@]}"; then
+    # Ensure the venv python is present and executable
+    MASTER_SCRIPT="$PROJECT_DIR/0 - DADS dataset extraction/master_setup_v3.py"
+    if [ ! -x "$VENV_PATH" ]; then
+        log ERROR "Python venv executable not found or not executable: $VENV_PATH"
+        log ERROR "Set VENV_PATH to a valid python executable or create the virtualenv at $PROJECT_DIR/.venv"
+        exit 1
+    fi
+    if [ ! -f "$MASTER_SCRIPT" ]; then
+        log ERROR "Master setup script not found: $MASTER_SCRIPT"
+        exit 1
+    fi
+
+    if ! "$VENV_PATH" "$MASTER_SCRIPT" "${AUGMENT_ARGS[@]}"; then
         log ERROR "Dataset preparation failed"
         exit 1
     fi
