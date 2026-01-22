@@ -1,0 +1,139 @@
+{
+  "version": 5,
+  "master_seed": 424242,
+
+  "audio": {
+    "sample_rate": 22050,
+    "duration_s": 4.0
+  },
+
+    "output": {
+    "clean_before_build": true,
+    "total_samples": 80,
+    "split_ratio": [0.7, 0.15, 0.15]
+  },
+
+  "validation": {
+    "label0_target": 0.30,
+    "tol_label0": 0.02,
+    "far_frac_min": 0.25,
+    "moving_frac_min": 0.50,
+    "doppler_frac_min": 0.40,
+    "strong_noise_dbfs": -55.0
+  },
+
+  "sources": {
+    "dads_root": "dataset_DADS_offline",
+    "labels": { "ambient": "0", "drone": "1" },
+    "split_policy": { "ratios": { "train": 0.85, "val": 0.10, "test": 0.05 } }
+  },
+
+  "scenarios": [
+    {
+      "name": "noise_only_1amb",
+      "weight": 0.3,
+      "label": 0,
+      "components": [
+        { "role": "ambient", "count": 1, "chain_template": [ { "op": "gain_db", "params": { "db": { "dist": "uniform", "min": -8, "max": 0 } } } ] }
+      ],
+      "global_chain_template": [
+        { "op": "hardware_orch", "params": { "noise_rms_dbfs": -60, "adc_bits": 12, "hp_hz": 100, "sr": 22050 } },
+        { "op": "normalize_peak", "params": { "target_dbfs": -1.0 } },
+        { "op": "stats", "params": { "sr": 22050 } }
+      ]
+    },
+
+    {
+      "name": "drone_far_static",
+      "weight": 0.10,
+      "label": 1,
+      "components": [
+        { "role": "drone", "count": 1, "chain_template": [
+            { "op": "env_orch", "params": { "distance_mode": "static", "distance_m": { "dist": "uniform", "min": 150, "max": 300 }, "ref_m": 1.0, "sr": 22050, "doppler": { "enabled": true, "v_mps": { "dist": "uniform", "min": 6, "max": 12 }, "direction": 1, "segments": 20, "max_ratio": 1.04 } } },
+              { "op": "drone_orch", "params": { "flutter_db": 1.2, "flutter_hz": 0.8, "sr": 22050 } }
+        ] },
+        { "role": "ambient", "count": 1, "chain_template": [ { "op": "gain_db", "params": { "db": { "dist": "uniform", "min": -6, "max": 0 } } } ] }
+      ],
+      "global_chain_template": [
+        { "op": "hardware_orch", "params": { "noise_rms_dbfs": -60, "adc_bits": 12, "hp_hz": 100, "sr": 22050 } },
+        { "op": "normalize_peak", "params": { "target_dbfs": -1.0 } },
+        { "op": "stats", "params": { "sr": 22050 } }
+      ]
+    },
+
+    {
+      "name": "drone_moving_in",
+      "weight": 0.25,
+      "label": 1,
+      "components": [
+        { "role": "drone", "count": 1, "chain_template": [
+            { "op": "env_orch", "params": { "distance_mode": "trajectory", "distance_start_m": { "dist": "uniform", "min": 200, "max": 300 }, "distance_end_m": { "dist": "uniform", "min": 40, "max": 80 }, "ref_m": 1.0, "sr": 22050, "doppler": { "enabled": true, "v_mps": { "dist": "uniform", "min": 8, "max": 18 }, "direction": 1, "segments": 28, "max_ratio": 1.06 } } },
+            { "op": "drone_orch", "params": { "flutter_db": 1.8, "flutter_hz": 1.0, "sr": 22050 } }
+        ] },
+        { "role": "ambient", "count": 1, "chain_template": [ { "op": "gain_db", "params": { "db": { "dist": "uniform", "min": -6, "max": 0 } } } ] }
+      ],
+      "global_chain_template": [
+        { "op": "hardware_orch", "params": { "noise_rms_dbfs": -60, "adc_bits": 12, "hp_hz": 100, "sr": 22050 } },
+        { "op": "normalize_peak", "params": { "target_dbfs": -1.0 } },
+        { "op": "stats", "params": { "sr": 22050 } }
+      ]
+    },
+
+    {
+      "name": "drone_multi",
+      "weight": 0.08,
+      "label": 1,
+      "components": [
+        { "role": "drone", "count": 2, "chain_template": [ { "op": "env_orch", "params": { "distance_mode": "static", "distance_m": { "dist": "uniform", "min": 60, "max": 200 }, "ref_m": 1.0, "sr": 22050, "doppler": { "enabled": true, "v_mps": { "dist": "uniform", "min": 4, "max": 12 }, "direction": 1, "segments": 16, "max_ratio": 1.04 } } }, { "op": "drone_orch", "params": { "flutter_db": 1.2, "flutter_hz": 0.8, "sr": 22050 } } ] },
+        { "role": "ambient", "count": 1, "chain_template": [ { "op": "gain_db", "params": { "db": { "dist": "uniform", "min": -6, "max": 0 } } } ] }
+      ],
+      "global_chain_template": [
+        { "op": "hardware_orch", "params": { "noise_rms_dbfs": -60, "adc_bits": 12, "hp_hz": 100, "sr": 22050 } },
+        { "op": "normalize_peak", "params": { "target_dbfs": -1.0 } },
+        { "op": "stats", "params": { "sr": 22050 } }
+      ]
+    },
+
+    {
+      "name": "drone_moving_out",
+      "weight": 0.25,
+      "label": 1,
+      "components": [
+        { "role": "drone", "count": 1, "chain_template": [
+            { "op": "env_orch", "params": { "distance_mode": "trajectory", "distance_start_m": { "dist": "uniform", "min": 40, "max": 80 }, "distance_end_m": { "dist": "uniform", "min": 200, "max": 300 }, "ref_m": 1.0, "sr": 22050, "doppler": { "enabled": true, "v_mps": { "dist": "uniform", "min": 8, "max": 18 }, "direction": -1, "segments": 28, "max_ratio": 1.06 } } },
+            { "op": "drone_orch", "params": { "flutter_db": 1.6, "flutter_hz": 0.9, "sr": 22050 } }
+        ] },
+        { "role": "ambient", "count": 1, "chain_template": [ { "op": "gain_db", "params": { "db": { "dist": "uniform", "min": -6, "max": 0 } } } ] }
+      ],
+      "global_chain_template": [
+        { "op": "hardware_orch", "params": { "noise_rms_dbfs": -55, "adc_bits": 8, "hp_hz": 100, "sr": 22050 } },
+        { "op": "normalize_peak", "params": { "target_dbfs": -1.0 } },
+        { "op": "stats", "params": { "sr": 22050 } }
+      ]
+    },
+
+    {
+      "name": "drone_mid_static",
+      "weight": 0.07,
+      "label": 1,
+      "components": [
+        { "role": "drone", "count": 1, "chain_template": [
+            { "op": "env_orch", "params": { "distance_mode": "static", "distance_m": { "dist": "uniform", "min": 60, "max": 150 }, "ref_m": 1.0, "sr": 22050, "doppler": { "enabled": false } } },
+            { "op": "drone_orch", "params": { "flutter_db": 1.0, "flutter_hz": 0.6, "sr": 22050 } }
+        ] },
+        { "role": "ambient", "count": 1, "chain_template": [ { "op": "gain_db", "params": { "db": { "dist": "uniform", "min": -6, "max": 0 } } } ] }
+      ],
+      "global_chain_template": [
+        { "op": "hardware_orch", "params": { "noise_rms_dbfs": -50, "adc_bits": 8, "hp_hz": 100, "sr": 22050 } },
+        { "op": "normalize_peak", "params": { "target_dbfs": -1.0 } },
+        { "op": "stats", "params": { "sr": 22050 } }
+      ]
+    }
+
+  ],
+
+  "mix": {
+    "mode": "sum",
+    "normalize_peak_dbfs": -1.0
+  }
+}
