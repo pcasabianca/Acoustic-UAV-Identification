@@ -162,15 +162,15 @@ if __name__ == "__main__":
                        help='Enable distance-stratified validation (evaluates each distance separately)')
     parser.add_argument('--use_class_weight', action='store_true',
                        help='Automatically compute and pass class_weight to Keras (balanced)')
-    parser.add_argument('--use_dynamic_weight', action='store_true',
+    parser.add_argument('--use_dynamic_weight', action='store_true', default=True,
                        help='Enable dynamic positive-class weight scheduler (updates each epoch)')
     parser.add_argument('--dyn_base', type=float, default=1.0,
                        help='Base weight multiplier for dynamic scheduler')
     parser.add_argument('--dyn_beta', type=float, default=0.8,
                        help='EMA beta for dynamic scheduler (smoothing)')
-    parser.add_argument('--dyn_min_w', type=float, default=0.5,
+    parser.add_argument('--dyn_min_w', type=float, default=0.01,
                        help='Minimum clamp for dynamic positive weight')
-    parser.add_argument('--dyn_max_w', type=float, default=8.0,
+    parser.add_argument('--dyn_max_w', type=float, default=10.0,
                        help='Maximum clamp for dynamic positive weight')
     parser.add_argument('--batch_size', type=int, default=BATCH_SIZE,
                        help='Override batch size for training')
@@ -200,13 +200,16 @@ if __name__ == "__main__":
     X_train, X_validation, X_test, y_train, y_validation, y_test = prepare_datasets()
 
     # Optionally compute class weights for balanced training
+    # adaptive class-weight utility removed; compute balanced class_weight when requested
     class_weight = None
-    if args.use_class_weight:
+
+    # Fallback: compute balanced class_weight if requested and adaptive not present
+    if class_weight is None and args.use_class_weight:
         try:
             classes = np.unique(y_train)
             cw = compute_class_weight('balanced', classes=classes, y=y_train)
             class_weight = {int(c): float(w) for c, w in zip(classes, cw)}
-            print(colored(f"[CONFIG] Using class_weight: {class_weight}", "cyan"))
+            print(colored(f"[CONFIG] Using class_weight (balanced): {class_weight}", "cyan"))
         except Exception as e:
             print(colored(f"[WARN] Could not compute class_weight: {e}", "yellow"))
 
@@ -320,7 +323,7 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         epochs=args.max_epochs,
         callbacks=callbacks_list,
-        class_weight=class_weight,
+        class_weight=(None if getattr(args, 'use_dynamic_weight', False) else class_weight),
         verbose=int(getattr(args, 'verbose', 2))
     )
 

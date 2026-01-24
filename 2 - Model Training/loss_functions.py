@@ -17,6 +17,8 @@ import numpy as np
 # or lower emphasis on the positive (drone) class.
 # Default 1.0 means no re-weighting (positive weight == negative weight).
 DYNAMIC_POS_WEIGHT = 1.0
+# Dynamic negative-class weight (used to penalize false positives)
+DYNAMIC_NEG_WEIGHT = 1.0
 
 def set_dynamic_pos_weight(value: float):
     """Set the global dynamic positive-class weight used by weighted losses.
@@ -30,6 +32,20 @@ def set_dynamic_pos_weight(value: float):
         DYNAMIC_POS_WEIGHT = float(value)
     except Exception:
         DYNAMIC_POS_WEIGHT = 1.0
+
+
+def set_dynamic_neg_weight(value: float):
+    """Set the global dynamic negative-class weight used by weighted losses.
+
+    Args:
+        value: negative-class weight (float > 0). Values >1 increase penalty
+               for negative-class examples (i.e., penalize false positives).
+    """
+    global DYNAMIC_NEG_WEIGHT
+    try:
+        DYNAMIC_NEG_WEIGHT = float(value)
+    except Exception:
+        DYNAMIC_NEG_WEIGHT = 1.0
 
 
 def recall_focused_loss(fn_penalty=50.0):
@@ -142,7 +158,24 @@ def focal_loss(alpha=0.75, gamma=2.0):
         modulating_factor = tf.pow(1.0 - p_t, gamma)
         focal = alpha_factor * modulating_factor * bce
 
-        return tf.reduce_mean(focal)
+        # Apply dynamic per-class weights multiplicatively so runtime updates
+        # to `DYNAMIC_POS_WEIGHT` and `DYNAMIC_NEG_WEIGHT` have an immediate effect.
+        try:
+            dyn_pos = float(DYNAMIC_POS_WEIGHT)
+        except Exception:
+            dyn_pos = 1.0
+        try:
+            dyn_neg = float(DYNAMIC_NEG_WEIGHT)
+        except Exception:
+            dyn_neg = 1.0
+
+        # y_true is one-hot at this point
+        y_true_pos = y_true[:, 1]
+        weights = y_true_pos * dyn_pos + (1.0 - y_true_pos) * dyn_neg
+
+        weighted_focal = weights * focal
+
+        return tf.reduce_mean(weighted_focal)
     
     return loss_fn
 
@@ -189,8 +222,14 @@ def weighted_binary_crossentropy(class_weight_drone=3.0):
         except Exception:
             effective_pos_weight = 1.0
 
-        # Apply class weights: positive label gets effective_pos_weight, negative gets 1.0
-        weights = y_true_pos * effective_pos_weight + (1.0 - y_true_pos) * 1.0
+        # Apply class weights: positive label gets effective_pos_weight, negative gets
+        # the runtime-updated `DYNAMIC_NEG_WEIGHT` (to penalize false positives).
+        try:
+            dyn_neg = float(DYNAMIC_NEG_WEIGHT)
+        except Exception:
+            dyn_neg = 1.0
+
+        weights = y_true_pos * effective_pos_weight + (1.0 - y_true_pos) * dyn_neg
 
         weighted_bce = weights * bce
 

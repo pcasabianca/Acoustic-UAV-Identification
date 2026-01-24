@@ -220,6 +220,13 @@ if __name__ == "__main__":
                         help='Loss function to use')
     parser.add_argument('--epochs', type=int, default=config.MAX_EPOCHS, help='Number of epochs')
     parser.add_argument('--blocks', type=int, default=4, help='Number of Conformer blocks')
+    parser.add_argument('--use_dynamic_weight', action='store_true', default=True,
+                        help='Enable dynamic positive-class weight scheduler (updates each epoch)')
+    parser.add_argument('--dyn_base', type=float, default=1.0, help='Base weight multiplier for dynamic scheduler')
+    parser.add_argument('--dyn_beta', type=float, default=0.8, help='EMA beta for dynamic scheduler (smoothing)')
+    parser.add_argument('--dyn_min_w', type=float, default=0.01, help='Minimum clamp for dynamic positive weight')
+    parser.add_argument('--dyn_max_w', type=float, default=10.0, help='Maximum clamp for dynamic positive weight')
+    parser.add_argument('--batch_size', type=int, default=BATCH_SIZE, help='Training batch size')
     args = parser.parse_args()
 
     # Prepare datasets
@@ -244,10 +251,15 @@ if __name__ == "__main__":
     model.summary()
     print("="*80 + "\n")
 
-    # Compute class weights
+    # Compute balanced class weights (adaptive utility removed)
     class_weights_array = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
     class_weights = dict(enumerate(class_weights_array))
-    print(f"[INFO] Class weights: {class_weights}")
+    print(f"[INFO] Class weights (balanced): {class_weights}")
+
+    if class_weights is None:
+        class_weights_array = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
+        class_weights = dict(enumerate(class_weights_array))
+        print(f"[INFO] Class weights (balanced fallback): {class_weights}")
 
     # Callbacks
     early_stop = keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)

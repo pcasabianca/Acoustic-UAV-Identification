@@ -247,11 +247,11 @@ def main():
     parser.add_argument('--stratified-validation', action='store_true', help='Enable distance-stratified validation')
     parser.add_argument('--use_class_weight', action='store_true', help='Compute class weights and apply sample_weight to fit')
     parser.add_argument('--max_epochs', type=int, default=config.MAX_EPOCHS, help='Maximum number of epochs to run (default: from config.py)')
-    parser.add_argument('--use_dynamic_weight', action='store_true', help='Enable dynamic positive-class weight scheduler (updates each epoch)')
+    parser.add_argument('--use_dynamic_weight', action='store_true', default=True, help='Enable dynamic positive-class weight scheduler (updates each epoch)')
     parser.add_argument('--dyn_base', type=float, default=1.0, help='Base weight multiplier for dynamic scheduler')
     parser.add_argument('--dyn_beta', type=float, default=0.8, help='EMA beta for dynamic scheduler (smoothing)')
-    parser.add_argument('--dyn_min_w', type=float, default=0.5, help='Minimum clamp for dynamic positive weight')
-    parser.add_argument('--dyn_max_w', type=float, default=8.0, help='Maximum clamp for dynamic positive weight')
+    parser.add_argument('--dyn_min_w', type=float, default=0.01, help='Minimum clamp for dynamic positive weight')
+    parser.add_argument('--dyn_max_w', type=float, default=10.0, help='Maximum clamp for dynamic positive weight')
     parser.add_argument('--batch_size', type=int, default=BATCH_SIZE, help='Override batch size for training')
     args = parser.parse_args()
     
@@ -302,7 +302,8 @@ def main():
 
     # Optionally compute class weights and sample weights (Attention trainer uses one-hot labels)
     sample_weight = None
-    if args.use_class_weight:
+    # Do not apply static sample weights when dynamic scheduler is enabled
+    if args.use_class_weight and not getattr(args, 'use_dynamic_weight', False):
         try:
             y_train_int = y_train.astype(int)
             classes = np.unique(y_train_int)

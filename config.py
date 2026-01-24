@@ -213,10 +213,10 @@ import os as _os
 AUGMENTATION_MAX_WORKERS = int(_os.environ.get('AUGMENTATION_WORKERS', _os.cpu_count() or 4))
 
 # Training parameters (centralized)
-MIN_EPOCHS = 10  # Minimum epochs before early stopping can trigger
+MIN_EPOCHS = 50  # Minimum epochs before early stopping can trigger
 MAX_EPOCHS = 1000  # Maximum epochs limit
 BATCH_SIZE = 128  # Default batch size for training
-LEARNING_RATE = 0.0001  # Default learning rate
+LEARNING_RATE = 0.0005  # Default learning rate
 
 # WAV write subtype used by augmentation/save routines (must be a valid subtype for soundfile)
 # Examples: 'PCM_16', 'FLOAT'

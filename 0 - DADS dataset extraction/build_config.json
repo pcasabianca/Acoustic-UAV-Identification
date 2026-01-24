@@ -29,7 +29,7 @@
   "targets": {
     "strict": true,
 
-    "label0_ratio": 0.30,
+    "label0_ratio": 0.50,
 
     "distance_bins_m": [0, 60, 150, 300],
     "distance_bin_weights_label1": [0.20, 0.30, 0.50],

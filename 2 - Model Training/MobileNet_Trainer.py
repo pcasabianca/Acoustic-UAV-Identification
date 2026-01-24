@@ -146,6 +146,18 @@ if __name__ == "__main__":
                         choices=['bce', 'weighted_bce', 'focal', 'recall_focused'],
                         help='Loss function to use')
     parser.add_argument('--epochs', type=int, default=config.MAX_EPOCHS, help='Number of epochs')
+    parser.add_argument('--use_dynamic_weight', action='store_true', default=True,
+                        help='Enable dynamic positive-class weight scheduler (updates each epoch)')
+    parser.add_argument('--dyn_base', type=float, default=1.0,
+                        help='Base weight multiplier for dynamic scheduler')
+    parser.add_argument('--dyn_beta', type=float, default=0.8,
+                        help='EMA beta for dynamic scheduler (smoothing)')
+    parser.add_argument('--dyn_min_w', type=float, default=0.01,
+                        help='Minimum clamp for dynamic positive weight')
+    parser.add_argument('--dyn_max_w', type=float, default=10.0,
+                        help='Maximum clamp for dynamic positive weight')
+    parser.add_argument('--batch_size', type=int, default=BATCH_SIZE,
+                        help='Training batch size')
     args = parser.parse_args()
 
     # Prepare datasets
@@ -170,24 +182,40 @@ if __name__ == "__main__":
     model.summary()
     print("="*80 + "\n")
 
-    # Compute class weights
+    # Compute balanced class weights (adaptive utility removed)
     class_weights_array = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
     class_weights = dict(enumerate(class_weights_array))
-    print(f"[INFO] Class weights: {class_weights}")
+    print(f"[INFO] Class weights (balanced): {class_weights}")
 
     # Callbacks
     early_stop = keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
     reduce_lr = keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-7)
+    callbacks = [early_stop, reduce_lr]
+
+    # Dynamic scheduler (enabled by default)
+    if getattr(args, 'use_dynamic_weight', False):
+        try:
+            from dynamic_class_weight import DynamicClassWeightCallback
+            dyn_cb = DynamicClassWeightCallback((X_validation, y_validation),
+                                                base_weight=args.dyn_base,
+                                                beta=args.dyn_beta,
+                                                min_w=args.dyn_min_w,
+                                                max_w=args.dyn_max_w,
+                                                batch_size=args.batch_size)
+            callbacks.append(dyn_cb)
+            print(f"[INFO] Dynamic positive-class weight scheduler ENABLED")
+        except Exception as e:
+            print(f"[WARN] Could not enable dynamic weight callback: {e}")
 
     # Train
-    print(f"\n[INFO] Training MobileNet-Audio with {args.loss} loss, batch_size={BATCH_SIZE}")
+    print(f"\n[INFO] Training MobileNet-Audio with {args.loss} loss, batch_size={args.batch_size}")
     history = model.fit(
         X_train, y_train,
         validation_data=(X_validation, y_validation),
-        batch_size=BATCH_SIZE,
+        batch_size=args.batch_size,
         epochs=args.epochs,
-        class_weight=class_weights,
-        callbacks=[early_stop, reduce_lr],
+        class_weight=(None if getattr(args, 'use_dynamic_weight', False) else class_weights),
+        callbacks=callbacks,
         verbose=2
     )
 

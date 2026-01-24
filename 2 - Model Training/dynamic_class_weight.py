@@ -2,7 +2,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 
-from loss_functions import set_dynamic_pos_weight, DYNAMIC_POS_WEIGHT
+from loss_functions import set_dynamic_neg_weight, DYNAMIC_NEG_WEIGHT
 
 
 class DynamicClassWeightCallback(keras.callbacks.Callback):
@@ -16,16 +16,19 @@ class DynamicClassWeightCallback(keras.callbacks.Callback):
         new = beta * current + (1-beta) * candidate
         new = clip(new, min_w, max_w)
 
-    This steers the loss toward emphasizing recall when FN >> FP, or
-    toward reducing false positives when FP >> FN.
+    Defaults are tuned to keep the positive-class weight within [0.1, 0.9]
+    and the `beta` parameter controls inertia (EMA smoothing).
     """
 
-    def __init__(self, val_data, base_weight=1.0, beta=0.8, min_w=0.5, max_w=8.0,
-                 batch_size=64, warmup_epochs=2, max_delta=2.0, min_pred_samples=10):
+    def __init__(self, val_data, base_weight=1.0, beta=0.9, min_w=0.01, max_w=10.0,
+                 batch_size=64, warmup_epochs=3, max_delta=2.0, min_pred_samples=10,
+                 rate_ema_alpha=0.8):
         super().__init__()
         self.x_val, self.y_val = val_data
         self.base_weight = float(base_weight)
+        # EMA inertia (higher => slower updates)
         self.beta = float(beta)
+        # clamp bounds for positive-class weight
         self.min_w = float(min_w)
         self.max_w = float(max_w)
         self.batch_size = int(batch_size)
@@ -35,21 +38,29 @@ class DynamicClassWeightCallback(keras.callbacks.Callback):
         self.max_delta = float(max_delta)
         # minimum number of validation samples required to compute updates
         self.min_pred_samples = int(min_pred_samples)
-        # initialize with current value
+        # smoothing for FP/FN rates (to reduce noisy per-epoch swings)
+        self.rate_ema_alpha = float(rate_ema_alpha)
+        self.ema_fp_rate = None
+        self.ema_fn_rate = None
+        # initialize with current negative-class weight (global state)
         try:
-            self.current = float(DYNAMIC_POS_WEIGHT)
+            self.current = float(DYNAMIC_NEG_WEIGHT)
         except Exception:
-            self.current = 1.0
+            self.current = float(self.base_weight)
 
     def on_train_begin(self, logs=None):
         try:
             # reset global state to base to avoid cross-run contamination
-            set_dynamic_pos_weight(float(self.base_weight))
-            self.current = float(DYNAMIC_POS_WEIGHT)
+            set_dynamic_neg_weight(float(self.base_weight))
+            self.current = float(DYNAMIC_NEG_WEIGHT)
         except Exception:
             self.current = float(self.base_weight)
 
     def on_epoch_end(self, epoch, logs=None):
+        # respect warmup: don't update until enough epochs passed
+        if epoch + 1 <= self.warmup_epochs:
+            print(f"[DynamicClassWeight] Epoch {epoch+1}: warmup (<= {self.warmup_epochs}), skipping update")
+            return
         # Predict on validation set
         preds = self.model.predict(self.x_val, batch_size=self.batch_size, verbose=0)
 
@@ -90,8 +101,33 @@ class DynamicClassWeightCallback(keras.callbacks.Callback):
         if preds_pos_mean <= 1e-6 or preds_pos_mean >= 1.0 - 1e-6:
             degenerate = True
 
-        # candidate weight increases when FN > FP
-        candidate = self.base_weight * float((fn + 1) / (fp + 1))
+        # compute normalized error rates to account for class imbalance
+        eps = 1e-6
+        positives = tp + fn
+        negatives = tn + fp
+        # rates: FN rate = FN / positives, FP rate = FP / negatives
+        fn_rate = float(fn) / float(positives) if positives > 0 else 0.0
+        fp_rate = float(fp) / float(negatives) if negatives > 0 else 0.0
+
+        # maintain EMA of rates to stabilize updates across epochs
+        if self.ema_fp_rate is None:
+            self.ema_fp_rate = fp_rate
+        else:
+            self.ema_fp_rate = self.rate_ema_alpha * self.ema_fp_rate + (1.0 - self.rate_ema_alpha) * fp_rate
+        if self.ema_fn_rate is None:
+            self.ema_fn_rate = fn_rate
+        else:
+            self.ema_fn_rate = self.rate_ema_alpha * self.ema_fn_rate + (1.0 - self.rate_ema_alpha) * fn_rate
+
+        smooth_fp = float(self.ema_fp_rate)
+        smooth_fn = float(self.ema_fn_rate)
+
+        # We update the negative-class weight (penalize false positives).
+        # Candidate negative weight increases when FP rate > FN rate:
+        #   candidate_neg = base_weight * (smoothed_fp + eps) / (smoothed_fn + eps)
+        # This raises the penalty on negative-class examples when FP is high,
+        # which discourages predicting positive for negatives.
+        candidate = self.base_weight * float((smooth_fp + eps) / (smooth_fn + eps))
 
         if degenerate:
             # do not apply large swings when model predicts a single class; nudge towards base
@@ -99,7 +135,7 @@ class DynamicClassWeightCallback(keras.callbacks.Callback):
             candidate = 0.5 * (candidate + self.base_weight)
             print(f"[DynamicClassWeight] Epoch {epoch+1}: degenerate preds detected (mean={preds_pos_mean:.4f}), using conservative candidate={candidate:.4f}")
 
-        # EMA step
+        # EMA step (inertia)
         new_val = self.beta * float(self.current) + (1.0 - self.beta) * float(candidate)
 
         # clamp multiplicative change relative to current to avoid runaway
@@ -113,9 +149,9 @@ class DynamicClassWeightCallback(keras.callbacks.Callback):
         # hard bounds
         new_val = max(self.min_w, min(self.max_w, new_val))
 
-        # update global variable
-        set_dynamic_pos_weight(new_val)
+        # update global variable (negative-class weight)
+        set_dynamic_neg_weight(new_val)
         self.current = new_val
 
         # Log changes with diagnostics
-        print(f"[DynamicClassWeight] Epoch {epoch+1}: tp={tp} fp={fp} tn={tn} fn={fn} mean_pred={preds_pos_mean:.4f} -> new_pos_weight={new_val:.4f}")
+        print(f"[DynamicClassWeight] Epoch {epoch+1}: tp={tp} fp={fp} tn={tn} fn={fn} mean_pred={preds_pos_mean:.4f} -> new_neg_weight={new_val:.4f}")

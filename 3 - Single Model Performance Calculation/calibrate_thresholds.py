@@ -78,6 +78,9 @@ def calculate_metrics(y_true, y_pred_proba, threshold):
         'accuracy': float(accuracy),
         'precision_drone': float(precision_drone),  # PPV
         'precision_ambient': float(precision_ambient),  # NPV
+        # Per-class accuracies: drone accuracy approximated by recall, ambient accuracy by specificity
+        'accuracy_drone': float(recall),
+        'accuracy_ambient': float(specificity),
         'recall': float(recall),  # Sensitivity
         'specificity': float(specificity),
         'f1_score': float(f1),
@@ -95,7 +98,8 @@ def optimize_threshold_hierarchical(y_true, y_pred_proba,
                                     min_precision_ambient=0.85,
                                     threshold_range=(0.05, 0.95),
                                     threshold_step=0.01,
-                                    verbose=True):
+                                    verbose=True,
+                                    max_accuracy_gap=None):
     """
     Optimise threshold avec critères hiérarchiques et relaxation progressive.
     
@@ -110,6 +114,8 @@ def optimize_threshold_hierarchical(y_true, y_pred_proba,
         print(f"  • Min Recall (Sensitivity):         {min_recall:.2%}")
         print(f"  • Min Precision Drone (PPV):        {min_precision_drone:.2%}")
         print(f"  • Min Precision Ambient (NPV):      {min_precision_ambient:.2%}")
+        if max_accuracy_gap is not None:
+            print(f"  • Max per-class accuracy gap:       {max_accuracy_gap:.2%} (abs(accuracy_drone - accuracy_ambient))")
         print(f"\nOptimization Target (Tier 2):")
         print(f"  • Maximize: balanced_precision = min(PPV, NPV)")
         print(f"\nTie-breakers (Tier 3):")
@@ -128,12 +134,18 @@ def optimize_threshold_hierarchical(y_true, y_pred_proba,
         all_results.append(metrics)
     
     # Tier 1: Filtrer par contraintes DURES
-    candidates = [
-        r for r in all_results
-        if (r['recall'] >= min_recall and
-            r['precision_drone'] >= min_precision_drone and
-            r['precision_ambient'] >= min_precision_ambient)
-    ]
+    def satisfies_hard_constraints(r, min_recall_, min_prec_drone_, min_prec_amb_, max_acc_gap_):
+        if not (r['recall'] >= min_recall_ and
+                r['precision_drone'] >= min_prec_drone_ and
+                r['precision_ambient'] >= min_prec_amb_):
+            return False
+        if max_acc_gap_ is not None:
+            gap = abs(r.get('accuracy_drone', 0.0) - r.get('accuracy_ambient', 0.0))
+            if gap > max_acc_gap_:
+                return False
+        return True
+
+    candidates = [r for r in all_results if satisfies_hard_constraints(r, min_recall, min_precision_drone, min_precision_ambient, max_accuracy_gap)]
     
     relaxation_applied = None
     
@@ -164,9 +176,7 @@ def optimize_threshold_hierarchical(y_true, y_pred_proba,
             
             candidates = [
                 r for r in all_results
-                if (r['recall'] >= relaxed_recall and
-                    r['precision_drone'] >= relaxed_drone and
-                    r['precision_ambient'] >= relaxed_ambient)
+                if satisfies_hard_constraints(r, relaxed_recall, relaxed_drone, relaxed_ambient, max_accuracy_gap)
             ]
             
             if candidates:
@@ -367,6 +377,8 @@ def main():
                         help='Minimum drone precision constraint (default: 0.70)')
     parser.add_argument('--min-precision-ambient', type=float, default=0.85,
                         help='Minimum ambient precision constraint (default: 0.85)')
+    parser.add_argument('--max-accuracy-gap', type=float, default=None,
+                        help='Maximum allowed absolute gap between per-class accuracies (drone vs ambient). e.g. 0.25')
     parser.add_argument('--output', type=str, default=None,
                         help='Output JSON file (default: results/calibrated_thresholds.json)')
     
@@ -396,6 +408,9 @@ def main():
         },
         'models': {}
     }
+    # Record the max_accuracy_gap constraint explicitly if provided
+    if args.max_accuracy_gap is not None:
+        calibration_data['constraints']['max_accuracy_gap'] = args.max_accuracy_gap
     
     # Calibrer chaque modèle
     for model_name in models:
@@ -413,7 +428,8 @@ def main():
                 min_recall=args.min_recall,
                 min_precision_drone=args.min_precision_drone,
                 min_precision_ambient=args.min_precision_ambient,
-                verbose=True
+                verbose=True,
+                max_accuracy_gap=args.max_accuracy_gap
             )
             
             # Vérifier contraintes

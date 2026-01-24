@@ -69,8 +69,8 @@ LOG_FILE="$LOG_DIR/pipeline_${TIMESTAMP}.log"
 CPU_COUNT=$(nproc 2>/dev/null || echo 1)
 DEFAULT_WORKERS=$(( CPU_COUNT > 1 ? CPU_COUNT - 1 : 1 ))
 # Cap to avoid oversubscription
-if [ $DEFAULT_WORKERS -gt 8 ]; then
-    DEFAULT_WORKERS=8
+if [ $DEFAULT_WORKERS -gt 12 ]; then
+    DEFAULT_WORKERS=12
 fi
 WORKERS="$DEFAULT_WORKERS"
 AUGMENT_SAMPLES=""
