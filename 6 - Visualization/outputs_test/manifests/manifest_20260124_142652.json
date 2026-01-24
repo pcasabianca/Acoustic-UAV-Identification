@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-01-24T14:26:52.929838Z",
+  "params": {
+    "models": null,
+    "snr_bins": null,
+    "strict": false
+  },
+  "artifacts": {
+    "perf_vs_snr": [],
+    "training": [],
+    "summary": [
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/summary/perf_index.csv",
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/summary/best_models__val.json"
+    ]
+  }
+}

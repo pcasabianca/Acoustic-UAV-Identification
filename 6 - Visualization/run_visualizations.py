@@ -1,242 +1,115 @@
 #!/usr/bin/env python3
-"""
-Unified Visualization Pipeline
-Génère toutes les visualisations à partir des résultats JSON précalculés.
+"""CLI entrypoint to run all visualizations.
 
-Usage:
-    python run_visualizations.py                    # Pipeline complet
-    python run_visualizations.py --skip-audio       # Sans audio examples
-    python run_visualizations.py --skip-threshold   # Sans threshold calibration
+This module imports `6 - Visualization/scripts/viz_all.py` by path and calls its `run()`.
 """
-
-import sys
 from pathlib import Path
 import argparse
-
-# Import project config
-sys.path.insert(0, str(Path(__file__).parent.parent))
-import config
-
-# Force non-interactive Matplotlib backend for headless environments
-import matplotlib
-matplotlib.use('Agg')
-
-from tools import plot_utils
-
-# Import visualization modules
-import performance_comparison_best
-import threshold_calibration_comparison
-import model_comparison_plots
-import snr_distribution
-import modern_dataset_analysis
-import modern_audio_examples
-import threshold_analysis
-import generate_html_report
-import json
-
-plot_utils.set_style()
+import importlib.util
+import sys
 
 
-def print_header(text):
-    """Print formatted header."""
-    print("\n" + "="*80)
-    print(f"{text:^80}")
-    print("="*80 + "\n")
-
-
-def print_step(step_num, total, name):
-    """Print step header."""
-    print(f"\n{'='*80}")
-    print(f"  [{step_num}/{total}] {name}")
-    print(f"{'='*80}\n")
-
-
-def main():
-    """Run unified visualization pipeline."""
-    parser = argparse.ArgumentParser(description='Run complete visualization pipeline')
-    parser.add_argument('--skip-audio', action='store_true', 
-                        help='Skip audio examples generation (slower)')
-    parser.add_argument('--skip-threshold', action='store_true',
-                        help='Skip threshold calibration analysis')
-    args = parser.parse_args()
-    
-    print_header("ACOUSTIC UAV IDENTIFICATION - VISUALIZATION PIPELINE")
-    
-    print("This script generates visualizations from precomputed JSON results.")
-    print(f"Performance data source: {config.PERFORMANCE_DIR}")
-    print(f"Outputs will be saved in: ./outputs/\n")
-    
-    # Define pipeline steps
-    total_steps = 8
-    if args.skip_audio:
-        total_steps -= 1
-    if args.skip_threshold:
-        total_steps -= 1
-    
-    steps = []
-    step_num = 1
-    
-    # NOTE: This pipeline only reads precomputed performance JSONs (test set)
-    # and plots them directly. Threshold selection is not performed here.
-    
-    # Step 1: Performance comparison
-    steps.append((step_num, "Performance Comparison", performance_comparison_best.main,
-                  "Loading test-set results and generating comparison plots..."))
-    step_num += 1
-    
-    # Step 2: Threshold calibration comparison
-    steps.append((step_num, "Threshold Calibration Comparison", threshold_calibration_comparison.main,
-                  "Analyzing threshold impact across models..."))
-    step_num += 1
-    
-    # Step 3: Model comparison
-    steps.append((step_num, "Model Performance Comparison", model_comparison_plots.main,
-                  "Generating model comparison visualizations..."))
-    step_num += 1
-    
-    # Step 4: SNR distribution
-    steps.append((step_num, "SNR Distribution Analysis", snr_distribution.main,
-                  "Analyzing Signal-to-Noise Ratio distribution..."))
-    step_num += 1
-    
-    # Step 5: Dataset analysis
-    steps.append((step_num, "Dataset Composition Analysis", modern_dataset_analysis.main,
-                  "Analyzing dataset statistics and distributions..."))
-    step_num += 1
-    
-    # Step 6: Threshold calibration analysis
-    if not args.skip_threshold and config.CALIBRATION_FILE_PATH.exists():
-        steps.append((step_num, "Threshold Calibration Analysis", threshold_analysis.main,
-                      "Analyzing calibrated thresholds and optimization curves..."))
-        step_num += 1
-    
-    # Legacy threshold-calibration step removed (consolidated into Threshold Calibration Comparison)
-    
-    # Step 8: Audio examples (optional)
-    if not args.skip_audio:
-        steps.append((step_num, "Audio Examples Generation", modern_audio_examples.main,
-                      "Generating representative audio examples with visualizations..."))
-        step_num += 1
-    
-    # Step 9: HTML report
-    steps.append((step_num, "HTML Report Generation", generate_html_report.main,
-                  "Creating interactive HTML report..."))
-    
-    # Validate performance files before running (fail-fast)
-    print("\n[INFO] Validating performance JSON files (fail-fast)...")
-    perf_dir = config.PERFORMANCE_DIR
-    # Only validate test-set performance JSONs. Ignore summary files
-    # (e.g. best_results_summary.json) and other non-test artifacts; the
-    # visualizer must plot the test results produced by Universal_Perf_Tester.
-    expected_files = list(perf_dir.glob('*_test.json'))
-
-    def validate_perf_file(p):
+def _import_viz_all_module():
+    base = Path(__file__).resolve().parent
+    script_path = base / 'scripts' / 'viz_all.py'
+    spec = importlib.util.spec_from_file_location('viz_all', str(script_path))
+    module = importlib.util.module_from_spec(spec)
+    # ensure repository root is on sys.path so `import config` in viz_all works
+    repo_root = base.parent
+    sys.path.insert(0, str(repo_root))
+    try:
+        spec.loader.exec_module(module)
+    finally:
         try:
-            with open(p, 'r') as f:
-                data = json.load(f)
-        except Exception as e:
-            raise RuntimeError(f"Invalid JSON file: {p} ({e})")
+            # remove the entry we inserted
+            sys.path.pop(0)
+        except Exception:
+            pass
+    return module
 
-        # Minimal required keys
-        required_top = ['metadata', 'global_metrics', 'class_metrics', 'predictions']
-        for k in required_top:
-            if k not in data:
-                raise RuntimeError(f"Missing top-level key '{k}' in {p}")
 
-        meta = data['metadata']
-        # Require minimal metadata fields. `threshold` is mandatory — visualizations
-        # rely on `metadata.threshold` produced by the testing step (Universal_Perf_Tester).
-        for mk in ['model', 'split', 'threshold', 'total_samples']:
-            if mk not in meta:
-                raise RuntimeError(f"Missing metadata.{mk} in {p}")
+def main(argv=None):
+    p = argparse.ArgumentParser()
+    p.add_argument('--perf-dir', default=None)
+    p.add_argument('--results-dir', default=None)
+    p.add_argument('--out-dir', default=None)
+    p.add_argument('--models', nargs='*', default=None)
+    p.add_argument('--use-test-outputs', action='store_true', help='Write outputs into outputs_test/ instead of outputs/')
+    p.add_argument('--snr-bins', default=None)
+    p.add_argument('--strict', action='store_true')
+    args = p.parse_args(argv)
 
-        gm = data['global_metrics']
-        if 'f1_score' not in gm and 'f1' not in gm:
-            raise RuntimeError(f"Missing global_metrics.f1_score in {p}")
-
-        cm = data['class_metrics']
-        if 'class_1' not in cm:
-            raise RuntimeError(f"Missing class_metrics.class_1 in {p}")
-
-        preds = data['predictions']
-        if not isinstance(preds, list):
-            raise RuntimeError(f"predictions should be a list in {p}")
-
-        # Check total_samples consistency
-        total = meta.get('total_samples')
-        if total is not None and len(preds) != total:
-            raise RuntimeError(f"predictions length ({len(preds)}) != metadata.total_samples ({total}) in {p}")
-
-    # Run validation
-    errors = []
-    for p in expected_files:
-        if not p.exists():
-            errors.append(f"Missing expected performance file: {p}")
-            continue
+    # determine if test outputs should be used (env var or flag)
+    import os, sys
+    use_test = args.use_test_outputs or (os.environ.get('VIS_TEST_OUTPUT', '') == '1')
+    out_dir = args.out_dir
+    if use_test:
+        # ensure repo root is importable so we can import config
+        repo_root = Path(__file__).resolve().parent.parent
+        sys.path.insert(0, str(repo_root))
         try:
-            validate_perf_file(p)
-        except Exception as e:
-            errors.append(str(e))
+            import config
+            # place outputs_test next to configured VIZ_OUTPUT_DIR
+            out_dir = str((Path(config.VIZ_OUTPUT_DIR).parent / 'outputs_test'))
+        finally:
+            try:
+                sys.path.pop(0)
+            except Exception:
+                pass
 
-    if errors:
-        print("\n[ERROR] Performance files validation failed:\n")
-        for e in errors:
-            print(f" - {e}")
-        print("\nAborting visualization pipeline. Regenerate performance JSONs with full metadata.")
-        return 1
+    mod = _import_viz_all_module()
+    res = mod.run(models=args.models, perf_dir=args.perf_dir, results_dir=args.results_dir, out_dir=out_dir,
+                  snr_bins=args.snr_bins, strict=args.strict)
 
-    # Execute pipeline (fail-fast on exceptions)
-    success_count = 0
-    failed_steps = []
-    
-    for num, name, func, description in steps:
-        print_step(num, total_steps, name)
-        print(description)
+    # write manifest
+    try:
+        from datetime import datetime, timezone
+        import json
+        base_out = Path(out_dir) if out_dir else Path('6 - Visualization') / 'outputs'
+        manifests_dir = base_out / 'manifests'
+        manifests_dir.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc)
+        manifest = {
+            'timestamp': now.isoformat(),
+            'params': {
+                'models': args.models,
+                'snr_bins': args.snr_bins,
+                'strict': bool(args.strict),
+            },
+            'artifacts': res.get('artifacts') if isinstance(res, dict) else None,
+        }
+        mpath = manifests_dir / f"manifest_{now.strftime('%Y%m%d_%H%M%S')}.json"
+        with open(mpath, 'w') as fh:
+            json.dump(manifest, fh, indent=2)
+        print('Wrote manifest:', str(mpath))
+        # also copy manifest into the specific run folder (if viz_all returned one)
         try:
-            func()
-            success_count += 1
-            print(f"\n✓ {name} completed successfully")
-        except Exception as e:
-            print(f"\n✗ {name} failed: {e}")
-            import traceback
-            traceback.print_exc()
-            print("\n[ERROR] Aborting due to failure (fail-fast mode).")
-            return 1
-    
-    # Final summary
-    print_header("VISUALIZATION PIPELINE COMPLETE")
-    print(f"Successfully completed {success_count}/{total_steps} steps")
-    
-    if failed_steps:
-        print(f"\n⚠️  Failed steps ({len(failed_steps)}):")
-        for step in failed_steps:
-            print(f"  - {step}")
-    
-    output_dir = Path(__file__).parent / 'outputs'
-    if output_dir.exists():
-        # Count generated files
-        png_files = list(output_dir.glob('*.png'))
-        txt_files = list(output_dir.glob('*.txt'))
-        json_files = list(output_dir.glob('*.json'))
-        html_files = list(output_dir.glob('*.html'))
-        
-        print(f"\nGenerated outputs in: {output_dir}")
-        print(f"  📊 {len(png_files)} PNG visualizations")
-        print(f"  📄 {len(txt_files)} text reports")
-        print(f"  🔧 {len(json_files)} JSON data files")
-        print(f"  🌐 {len(html_files)} HTML pages")
-        print(f"\n  Total: {len(list(output_dir.glob('*')))} files")
-    
-    print("\n" + "="*80)
-    print("\n💡 Quick Access:")
-    print(f"  📊 Performance Report: {output_dir / 'performance_report.html'}")
-    print(f"  📈 Performance JSONs: {config.PERFORMANCE_DIR}")
-    if not args.skip_audio and (output_dir / 'audio_examples' / 'index.html').exists():
-        print(f"  🔊 Audio Examples: {output_dir / 'audio_examples' / 'index.html'}")
-    print("\n" + "="*80)
-    
-    return 0 if success_count == total_steps else 1
+            run_out = res.get('out_dir') if isinstance(res, dict) else None
+            if run_out:
+                run_manifests = Path(run_out) / 'manifests'
+                run_manifests.mkdir(parents=True, exist_ok=True)
+                run_mpath = run_manifests / mpath.name
+                with open(run_mpath, 'w') as fh2:
+                    json.dump(manifest, fh2, indent=2)
+                print('Also wrote run manifest:', str(run_mpath))
+        except Exception:
+            pass
+    except Exception as e:
+        print('Failed to write manifest:', e, file=sys.stderr)
+
+    # exit code semantics: if strict and MVP missing => non-zero
+    try:
+        m = res.get('artifacts', {})
+        has_perf_index = any('perf_index.csv' in str(p) for p in m.get('summary', []))
+        has_perf_plot = len(m.get('perf_vs_snr', [])) > 0
+        if args.strict and not (has_perf_index and has_perf_plot):
+            print('Strict mode: MVP artifacts missing', file=sys.stderr)
+            sys.exit(2)
+    except Exception:
+        pass
+
+    print(res)
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+if __name__ == '__main__':
+    main()

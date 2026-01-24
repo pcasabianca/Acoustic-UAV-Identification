@@ -1,0 +1,34 @@
+{
+  "timestamp": "2026-01-24T14:31:07.628593Z",
+  "params": {
+    "models": null,
+    "snr_bins": null,
+    "strict": false
+  },
+  "artifacts": {
+    "perf_vs_snr": [
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/perf_vs_snr/perf_vs_snr__ATTENTION_CRNN__accuracy_drone.png",
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/perf_vs_snr/perf_vs_snr__CNN__accuracy_drone.png",
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/perf_vs_snr/perf_vs_snr__CONFORMER__accuracy_drone.png",
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/perf_vs_snr/perf_vs_snr__CRNN__accuracy_drone.png",
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/perf_vs_snr/perf_vs_snr__EFFICIENTNET__accuracy_drone.png",
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/perf_vs_snr/perf_vs_snr__MOBILENET__accuracy_drone.png",
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/perf_vs_snr/perf_vs_snr__RNN__accuracy_drone.png",
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/perf_vs_snr/perf_vs_snr__TCN__accuracy_drone.png"
+    ],
+    "training": [
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/training/training_curves__ATTENTION_CRNN.png",
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/training/training_curves__CNN.png",
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/training/training_curves__CONFORMER.png",
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/training/training_curves__CRNN.png",
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/training/training_curves__EFFICIENTNET.png",
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/training/training_curves__MOBILENET.png",
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/training/training_curves__RNN.png",
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/training/training_curves__TCN.png"
+    ],
+    "summary": [
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/summary/perf_index.csv",
+      "/var/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/outputs_test/summary/best_models__val.json"
+    ]
+  }
+}
