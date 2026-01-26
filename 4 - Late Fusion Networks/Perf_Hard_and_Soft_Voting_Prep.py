@@ -17,9 +17,10 @@ import config
 
 # Read and save parameters.
 DATASET_PATH = config.DATASET_ROOT_STR  # Path of testing dataset
-SAMPLE_RATE = 22050
-DURATION = 10  # Measured in seconds - MUST MATCH TRAINING!
-SAMPLES_PER_TRACK = SAMPLE_RATE * DURATION
+SAMPLE_RATE = getattr(config, 'SAMPLE_RATE', 22050)
+# Use audio duration from config (seconds)
+DURATION = float(getattr(config, 'AUDIO_DURATION_S', getattr(config, 'DURATION', 10)))
+SAMPLES_PER_TRACK = int(SAMPLE_RATE * DURATION)
 
 # Model testing - Change model_index (1-10) for each voting model
 model_index = 1  # CHANGE THIS FOR EACH MODEL (1 to 10)
@@ -80,7 +81,7 @@ class _Class_Predict_Service:
         return predict_prob
 
     # Extract mel specs from raw audio.
-    def preprocess(self, file_path, n_mels=90, n_fft=2048, hop_length=512, num_segments=10):
+    def preprocess(self, file_path, n_mels=None, n_fft=None, hop_length=None, num_segments=None):
         """Extract MFCCs from audio file.
         :param file_path (str): Path of audio file
         :param n_mels (int): # of mels to extract
@@ -88,9 +89,15 @@ class _Class_Predict_Service:
         :param hop_length (int): Sliding window for STFT. Measured in # of samples
         """
 
-        num_samples_per_segment = int(SAMPLES_PER_TRACK / num_segments)
+        # Resolve defaults from config when parameters not provided
+        n_mels = int(n_mels or getattr(config, 'MEL_N_MELS', 44))
+        n_fft = int(n_fft or getattr(config, 'MEL_N_FFT', 2048))
+        hop_length = int(hop_length or getattr(config, 'MEL_HOP_LENGTH', 512))
+        num_segments = int(num_segments or getattr(config, 'NUM_SEGMENTS', 1))
 
-        # Load audio file.
+        num_samples_per_segment = int(SAMPLES_PER_TRACK / max(1, num_segments))
+
+        # Load audio file at canonical sample rate
         signal, sr = librosa.load(file_path, sr=SAMPLE_RATE)
 
         # Process segments extracting mels and storing data.
@@ -106,7 +113,7 @@ class _Class_Predict_Service:
             # Extract mel specs.
             mel = librosa.feature.melspectrogram(y=segment, sr=sr, n_mels=n_mels, n_fft=n_fft,
                                                  hop_length=hop_length)
-            db_mel = librosa.power_to_db(mel)
+            db_mel = librosa.power_to_db(mel, ref=np.max)
 
         return db_mel.T
 

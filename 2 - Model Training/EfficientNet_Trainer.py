@@ -90,11 +90,17 @@ def mbconv_block(inputs, filters, kernel_size=3, strides=1, expand_ratio=6, se_r
     return x
 
 
-def build_model(input_shape=(44, 90, 1)):
+def build_model(input_shape=None):
     """
     Build EfficientNet-B0 Audio model
     Compound scaling optimized for audio spectrograms
     """
+    if input_shape is None:
+        n_mels = int(getattr(__import__('config'), 'MEL_N_MELS', 44))
+        time_frames = int(getattr(__import__('config'), 'MEL_TIME_FRAMES', 90))
+        channels = 1
+        input_shape = (n_mels, time_frames, channels)
+
     inputs = layers.Input(shape=input_shape)
     
     # Stem

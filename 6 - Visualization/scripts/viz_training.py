@@ -13,7 +13,11 @@ import config
 logger = logging.getLogger(__name__)
 
 VIZ_NAME = 'training'
-VIZ_ORDER = 90
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import config
+
+VIZ_ORDER = int(getattr(config, 'MEL_TIME_FRAMES', 90))
 
 
 def discover_history(results_dir: str, model: str) -> tuple:

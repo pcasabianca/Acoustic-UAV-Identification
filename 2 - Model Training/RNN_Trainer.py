@@ -88,7 +88,7 @@ def prepare_datasets():
     # RNN expects 3D input: (samples, time_steps, features)
     # Data from load_data() is already 3D: (samples, n_mels=44, time_frames=173)
     # NO transformation needed - unlike CNN which needs 4D for Conv2D
-    # Shape: (samples, n_mels, time_frames) - perfect for LSTM
+ # Shape: (samples, n_mels, time_frames) - perfect for LSTM
 
     return X_train, X_validation, X_test, y_train, y_validation, y_test
 

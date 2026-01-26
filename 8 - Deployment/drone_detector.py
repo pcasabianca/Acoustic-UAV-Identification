@@ -226,7 +226,7 @@ class DroneDetector:
             audio_path: Path to audio file
         
         Returns:
-            MEL spectrogram features (44, 90) or None if failed
+            MEL spectrogram features (n_mels, time_frames) as defined in project `config.py`, or None if failed
         """
         try:
             # Load audio
@@ -274,7 +274,7 @@ class DroneDetector:
         Run inference on all loaded models.
         
         Args:
-            features: MEL spectrogram (44, 90)
+            features: MEL spectrogram (n_mels, time_frames) matching `config.py`
         
         Returns:
             Dict of {model_name: drone_probability}
@@ -288,7 +288,7 @@ class DroneDetector:
                     model_info['threshold'] = calibrated_thresholds[calibrated_key]
         
         # Prepare input (add batch and channel dimensions)
-        X = features[np.newaxis, ..., np.newaxis]  # (1, 44, 90, 1)
+        X = features[np.newaxis, ..., np.newaxis]  # (1, n_mels, time_frames, 1) per `config.py`
         
         predictions = {}
         

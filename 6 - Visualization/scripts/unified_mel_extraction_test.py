@@ -5,8 +5,8 @@ Usage: run from project root under the project's .venv:
   .venv/bin/python3 scripts/unified_mel_extraction_test.py
 
 What it does:
-- Implements a single `extract_mel` function matching trainers (n_mels=44, n_fft=2048, hop_length=512,
-  duration=4.0s, trim/pad to 90 frames, librosa.power_to_db with ref=np.max).
+- Implements a single `extract_mel` function matching trainers (params read from `config.py`: n_mels, n_fft, hop_length,
+  duration, trim/pad to `MEL_TIME_FRAMES`, librosa.power_to_db with ref=np.max).
 - Walks `config.DATASET_ROOT / '1'` (folder `1`) and processes up to N samples (default 30).
 - For each sample: computes on-the-fly mel, tries to load precomputed mel from
   `mel_test_index.json` (if present), writes a comparison PNG (`pre/onfly/diff`).
@@ -33,16 +33,18 @@ OUT_DIR = Path("6 - Visualization/outputs/unified_extraction")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 SAMPLE_COUNT = 30
-N_MELS = 44
-N_FFT = 2048
-HOP_LENGTH = 512
-DURATION = 4.0
-TARGET_FRAMES = 90
+N_MELS = int(getattr(config, 'MEL_N_MELS', 44))
+N_FFT = int(getattr(config, 'MEL_N_FFT', 2048))
+HOP_LENGTH = int(getattr(config, 'MEL_HOP_LENGTH', 512))
+DURATION = float(getattr(config, 'MEL_DURATION', getattr(config, 'AUDIO_DURATION_S', 4.0)))
+TARGET_FRAMES = int(getattr(config, 'MEL_TIME_FRAMES', 90))
 
 
-def extract_mel(path, sr=22050, duration=DURATION, n_mels=N_MELS, n_fft=N_FFT, hop_length=HOP_LENGTH,
+def extract_mel(path, sr=None, duration=DURATION, n_mels=N_MELS, n_fft=N_FFT, hop_length=HOP_LENGTH,
                 target_frames=TARGET_FRAMES, to_db=True):
     # load
+    # use config sample rate by default
+    sr = int(sr or getattr(config, 'SAMPLE_RATE', 22050))
     y, _ = librosa.load(str(path), sr=sr, duration=duration)
     # if audio shorter than duration librosa.load already returns shortened array
     mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=n_mels, n_fft=n_fft, hop_length=hop_length)

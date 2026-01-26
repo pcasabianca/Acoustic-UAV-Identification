@@ -94,24 +94,30 @@ class DistanceStratifiedCallback(keras.callbacks.Callback):
                     distance = match.group(1)
                 
                 if distance and distance in distances:
-                    # Load audio and extract MEL spectrogram
+                    # Load audio and extract MEL spectrogram using centralized config values
                     try:
-                        audio, sr = librosa.load(wav_file, sr=22050)
+                        sr_cfg = int(getattr(__import__('config'), 'SAMPLE_RATE', 22050))
+                        n_mels = int(getattr(__import__('config'), 'MEL_N_MELS', 44))
+                        n_fft = int(getattr(__import__('config'), 'MEL_N_FFT', 2048))
+                        hop_length = int(getattr(__import__('config'), 'MEL_HOP_LENGTH', 512))
+                        target_frames = int(getattr(__import__('config'), 'MEL_TIME_FRAMES', 90))
+
+                        audio, sr = librosa.load(wav_file, sr=sr_cfg)
                         mel = librosa.feature.melspectrogram(
-                            y=audio, sr=sr, n_mels=44, n_fft=2048, hop_length=512
+                            y=audio, sr=sr, n_mels=n_mels, n_fft=n_fft, hop_length=hop_length
                         )
                         mel_db = librosa.power_to_db(mel, ref=np.max)
-                        
-                        # Ensure consistent shape (44, 90)
-                        if mel_db.shape[1] < 90:
-                            mel_db = np.pad(mel_db, ((0, 0), (0, 90 - mel_db.shape[1])), mode='constant')
+
+                        # Ensure consistent shape (n_mels, target_frames)
+                        if mel_db.shape[1] < target_frames:
+                            mel_db = np.pad(mel_db, ((0, 0), (0, target_frames - mel_db.shape[1])), mode='constant')
                         else:
-                            mel_db = mel_db[:, :90]
-                        
+                            mel_db = mel_db[:, :target_frames]
+
                         self.distance_data[distance]['features'].append(mel_db)
                         self.distance_data[distance]['labels'].append(1)
                         self.distance_data[distance]['filenames'].append(filename)
-                        
+
                     except Exception as e:
                         print(f"Error loading {filename}: {e}")
         
@@ -119,21 +125,27 @@ class DistanceStratifiedCallback(keras.callbacks.Callback):
         ambient_dir = self.validation_dir / "0"
         if ambient_dir.exists():
             try:
-                audio, sr = librosa.load(wav_file, sr=22050)
+                sr_cfg = int(getattr(__import__('config'), 'SAMPLE_RATE', 22050))
+                n_mels = int(getattr(__import__('config'), 'MEL_N_MELS', 44))
+                n_fft = int(getattr(__import__('config'), 'MEL_N_FFT', 2048))
+                hop_length = int(getattr(__import__('config'), 'MEL_HOP_LENGTH', 512))
+                target_frames = int(getattr(__import__('config'), 'MEL_TIME_FRAMES', 90))
+
+                audio, sr = librosa.load(wav_file, sr=sr_cfg)
                 mel = librosa.feature.melspectrogram(
-                    y=audio, sr=sr, n_mels=44, n_fft=2048, hop_length=512
+                    y=audio, sr=sr, n_mels=n_mels, n_fft=n_fft, hop_length=hop_length
                 )
                 mel_db = librosa.power_to_db(mel, ref=np.max)
-                
-                if mel_db.shape[1] < 90:
-                    mel_db = np.pad(mel_db, ((0, 0), (0, 90 - mel_db.shape[1])), mode='constant')
+
+                if mel_db.shape[1] < target_frames:
+                    mel_db = np.pad(mel_db, ((0, 0), (0, target_frames - mel_db.shape[1])), mode='constant')
                 else:
-                    mel_db = mel_db[:, :90]
-                
+                    mel_db = mel_db[:, :target_frames]
+
                 self.distance_data['ambient']['features'].append(mel_db)
                 self.distance_data['ambient']['labels'].append(0)
                 self.distance_data['ambient']['filenames'].append(wav_file.name)
-                
+
             except Exception as e:
                 print(f"Error loading {wav_file.name}: {e}")
         

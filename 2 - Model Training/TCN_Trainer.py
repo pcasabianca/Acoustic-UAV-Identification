@@ -81,15 +81,21 @@ def residual_block(x, dilation_rate, nb_filters, kernel_size):
     return x
 
 
-def build_model(input_shape=(44, 90, 1)):
+def build_model(input_shape=None):
     """
     Build TCN (Temporal Convolutional Network) model
     Uses dilated causal convolutions for temporal pattern recognition
     """
+    if input_shape is None:
+        n_mels = int(getattr(__import__('config'), 'MEL_N_MELS', 44))
+        time_frames = int(getattr(__import__('config'), 'MEL_TIME_FRAMES', 90))
+        channels = 1
+        input_shape = (n_mels, time_frames, channels)
+
     inputs = layers.Input(shape=input_shape)
     
     # Reshape for 1D convolution (treat frequency as channels, time as sequence)
-    # From (44, 90, 1) to (90, 44) - time steps, features
+    # From (n_mels, time_frames, 1) to (time_frames, n_mels) - time steps, features
     x = layers.Reshape((input_shape[1], input_shape[0]))(inputs)
     
     # Initial convolution

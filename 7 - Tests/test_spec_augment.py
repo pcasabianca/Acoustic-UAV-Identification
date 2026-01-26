@@ -12,6 +12,10 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "1 - Preprocessing and Features Extraction"))
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import config
 from Mel_Preprocess_and_Feature_Extract import spec_augment
 
 
@@ -21,8 +25,8 @@ class TestSpecAugment(unittest.TestCase):
     def setUp(self):
         """Create test mel spectrogram"""
         # Typical mel spectrogram shape: (time_steps, n_mels)
-        self.time_steps = 100
-        self.n_mels = 90
+        self.time_steps = int(getattr(config, 'MEL_TIME_FRAMES', 100))
+        self.n_mels = int(getattr(config, 'MEL_N_MELS', 90))
         self.mel_spec = np.random.randn(self.time_steps, self.n_mels).astype(np.float32)
     
     def test_spec_augment_shape(self):
@@ -135,7 +139,7 @@ class TestSpecAugmentEdgeCases(unittest.TestCase):
     
     def test_single_time_step(self):
         """Test with single time step"""
-        single_time = np.random.randn(1, 90).astype(np.float32)
+        single_time = np.random.randn(1, int(getattr(config, 'MEL_N_MELS', 90))).astype(np.float32)
         
         augmented = spec_augment(single_time, time_mask_width=1, freq_mask_width=8, num_masks=1)
         self.assertEqual(augmented.shape, single_time.shape)
@@ -149,7 +153,7 @@ class TestSpecAugmentEdgeCases(unittest.TestCase):
     
     def test_all_zeros(self):
         """Test with all-zero spectrogram"""
-        zero_mel = np.zeros((100, 90), dtype=np.float32)
+        zero_mel = np.zeros((int(getattr(config, 'MEL_TIME_FRAMES', 100)), int(getattr(config, 'MEL_N_MELS', 90))), dtype=np.float32)
         
         # Should work (masking with mean of zeros is still zeros)
         augmented = spec_augment(zero_mel, time_mask_width=10, freq_mask_width=8, num_masks=2)
@@ -177,7 +181,7 @@ class TestSpecAugmentIntegration(unittest.TestCase):
         # For 10s audio at 22050 Hz, hop_length=512, num_segments=10
         # Each segment is 1s = 22050 samples
         # Mel frames = ceil(22050 / 512) ≈ 44 frames
-        realistic_mel = np.random.randn(44, 90).astype(np.float32)
+        realistic_mel = np.random.randn(int(getattr(config, 'MEL_TIME_FRAMES', 44)), int(getattr(config, 'MEL_N_MELS', 90))).astype(np.float32)
         
         # Apply SpecAugment with typical parameters
         augmented = spec_augment(realistic_mel, 
@@ -191,7 +195,7 @@ class TestSpecAugmentIntegration(unittest.TestCase):
     def test_batch_augmentation(self):
         """Test augmenting multiple spectrograms"""
         batch_size = 32
-        spectrograms = [np.random.randn(44, 90).astype(np.float32) for _ in range(batch_size)]
+        spectrograms = [np.random.randn(int(getattr(config, 'MEL_TIME_FRAMES', 44)), int(getattr(config, 'MEL_N_MELS', 90))).astype(np.float32) for _ in range(batch_size)]
         
         # Augment each
         augmented_batch = [spec_augment(mel, time_mask_width=10, freq_mask_width=8, num_masks=2) 
@@ -199,7 +203,7 @@ class TestSpecAugmentIntegration(unittest.TestCase):
         
         # Check all have correct shape
         for aug in augmented_batch:
-            self.assertEqual(aug.shape, (44, 90))
+            self.assertEqual(aug.shape, (int(getattr(config, 'MEL_TIME_FRAMES', 44)), int(getattr(config, 'MEL_N_MELS', 90))))
         
         # Check they're all different (due to randomness)
         # Compare first two

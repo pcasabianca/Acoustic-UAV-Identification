@@ -64,11 +64,17 @@ def depthwise_separable_block(x, filters, strides=1):
     return x
 
 
-def build_model(input_shape=(44, 90, 1)):
+def build_model(input_shape=None):
     """
     Build MobileNet-Audio model
     Lightweight architecture optimized for audio with depthwise separable convolutions
     """
+    if input_shape is None:
+        n_mels = int(getattr(__import__('config'), 'MEL_N_MELS', 44))
+        time_frames = int(getattr(__import__('config'), 'MEL_TIME_FRAMES', 90))
+        channels = 1
+        input_shape = (n_mels, time_frames, channels)
+
     inputs = layers.Input(shape=input_shape)
     
     # Initial standard convolution

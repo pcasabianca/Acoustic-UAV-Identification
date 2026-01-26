@@ -123,7 +123,7 @@ def prepare_datasets():
     return X_train, y_train, X_val, y_val
 
 
-def build_attention_crnn(input_shape=(44, 90), num_classes=2):
+def build_attention_crnn(input_shape=None, num_classes=2):
     """
     Build Attention-Enhanced CRNN model.
     
@@ -134,6 +134,12 @@ def build_attention_crnn(input_shape=(44, 90), num_classes=2):
     4. Channel Attention layer
     5. Dense classifier
     """
+    # Resolve default input shape from centralized config when not provided
+    if input_shape is None:
+        n_mels = int(getattr(__import__('config'), 'MEL_N_MELS', 44))
+        time_frames = int(getattr(__import__('config'), 'MEL_TIME_FRAMES', 90))
+        input_shape = (n_mels, time_frames)
+
     inputs = layers.Input(shape=input_shape + (1,), name='input')
     
     # ============================================================

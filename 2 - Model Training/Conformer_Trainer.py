@@ -133,15 +133,22 @@ def conformer_block(x, dim, num_heads=4, ffn_expansion=4, conv_kernel_size=31, d
     return x
 
 
-def build_model(input_shape=(44, 90, 1), num_conformer_blocks=4):
+def build_model(input_shape=None, num_conformer_blocks=4):
     """
     Build Conformer model (CNN + Transformer hybrid)
     Combines local feature extraction (CNN) with global context (Transformer)
     """
+    # Resolve default input_shape from centralized config when not provided
+    if input_shape is None:
+        n_mels = int(getattr(__import__('config'), 'MEL_N_MELS', 44))
+        time_frames = int(getattr(__import__('config'), 'MEL_TIME_FRAMES', 90))
+        channels = 1
+        input_shape = (n_mels, time_frames, channels)
+
     inputs = layers.Input(shape=input_shape)
-    
+
     # Reshape for 1D processing (time as sequence, frequency as features)
-    # From (44, 90, 1) to (90, 44)
+    # From (n_mels, time_frames, channels) to (time_frames, n_mels)
     x = layers.Reshape((input_shape[1], input_shape[0]))(inputs)
     
     # Subsampling layer (reduce temporal dimension)

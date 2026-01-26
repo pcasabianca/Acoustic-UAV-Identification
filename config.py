@@ -6,6 +6,7 @@ Works on both Linux and Windows.
 
 import os
 from pathlib import Path
+import math
 
 # Project root directory (where this config.py file is located)
 PROJECT_ROOT = Path(__file__).parent.resolve()
@@ -213,7 +214,7 @@ import os as _os
 AUGMENTATION_MAX_WORKERS = int(_os.environ.get('AUGMENTATION_WORKERS', _os.cpu_count() or 4))
 
 # Training parameters (centralized)
-MIN_EPOCHS = 50  # Minimum epochs before early stopping can trigger
+MIN_EPOCHS = 10  # Minimum epochs before early stopping can trigger
 MAX_EPOCHS = 1000  # Maximum epochs limit
 BATCH_SIZE = 128  # Default batch size for training
 LEARNING_RATE = 0.0005  # Default learning rate
@@ -258,10 +259,15 @@ PROP_DOMAIN_DEFAULTS = {
 # training, extraction and inference.
 MFCC_N_MFCC = 20            # number of MFCCs to extract
 MEL_DURATION = float(AUDIO_DURATION_S)        # seconds used per example at training/inference
-MEL_N_MELS = 44           # number of mel bins
+MEL_N_MELS = 64           # number of mel bins
 MEL_N_FFT = 2048          # FFT window size
-MEL_HOP_LENGTH = 512      # hop length in samples
-MEL_TIME_FRAMES = 90      # number of time frames to pad/truncate to
+MEL_HOP_LENGTH = 256      # hop length in samples
+# Compute number of time frames from sample rate / duration / hop length and segments.
+# This keeps features consistent when `MEL_HOP_LENGTH`, `SAMPLE_RATE` or `AUDIO_DURATION_S` change.
+_samples_per_track = int(SAMPLE_RATE * float(AUDIO_DURATION_S))
+_samples_per_segment = int(_samples_per_track / max(1, NUM_SEGMENTS))
+# frames = ceil(samples_per_segment / hop_length)
+MEL_TIME_FRAMES = int(math.ceil(_samples_per_segment / float(MEL_HOP_LENGTH)))
 MEL_PAD_VALUE = -100.0    # sentinel padding value used in precomputed features
 
 # Feature extraction behaviors
