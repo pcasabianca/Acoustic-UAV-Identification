@@ -261,7 +261,7 @@ MFCC_N_MFCC = 20            # number of MFCCs to extract
 MEL_DURATION = float(AUDIO_DURATION_S)        # seconds used per example at training/inference
 MEL_N_MELS = 64           # number of mel bins
 MEL_N_FFT = 2048          # FFT window size
-MEL_HOP_LENGTH = 256      # hop length in samples
+MEL_HOP_LENGTH = 512      # hop length in samples
 # Compute number of time frames from sample rate / duration / hop length and segments.
 # This keeps features consistent when `MEL_HOP_LENGTH`, `SAMPLE_RATE` or `AUDIO_DURATION_S` change.
 _samples_per_track = int(SAMPLE_RATE * float(AUDIO_DURATION_S))
