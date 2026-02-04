@@ -121,56 +121,31 @@ def run(ctx, args=None):
             preds_for_sc = [p for p in perfs for p in p.get('predictions', []) if _get_scenario(p) == sc]
             drone_flags.append(_detect_drone_flag_for_list(preds_for_sc))
 
-        # plot using a single axis and draw a small colored strip behind tick labels
-        fig, ax = plt.subplots(figsize=(12, max(6, 0.5 * len(models))))
-        cmap = plt.get_cmap('RdYlGn')
-        vmin = np.nanmin(matrix_ord)
-        vmax = np.nanmax(matrix_ord)
-        if np.isnan(vmin) or np.isnan(vmax):
-            vmin, vmax = 0.0, 1.0
-        im = ax.imshow(matrix_ord, aspect='auto', interpolation='nearest', cmap=cmap, vmin=vmin, vmax=vmax)
-        ax.set_yticks(range(len(models)))
-        ax.set_yticklabels(models)
+            # use shared utility to create multiple heatmaps (all, val, test, val_test)
+            from tools.heatmap_utils import generate_model_scenario_heatmap
 
-        # annotate scenario with avg SNR in label when available
-        xticks = []
-        for sc in scenarios_ord:
-            sn = avg_snr.get(sc)
-            if np.isnan(sn):
-                xticks.append(sc)
-            else:
-                xticks.append(f"{sc}\n({sn:.0f} dB)")
+            plots = [
+                ('all', None, 'Accuracy Heatmap by Scenario (all splits)'),
+                ('val', ['val'], 'Accuracy Heatmap by Scenario (val)'),
+                ('test', ['test'], 'Accuracy Heatmap by Scenario (test)'),
+                ('val_test', ['val', 'test'], 'Accuracy Heatmap by Scenario (val+test)'),
+            ]
 
-        ax.set_xticks(range(len(scenarios_ord)))
-        ax.set_xticklabels(xticks, rotation=45, ha='right')
-        ax.set_xlabel('Scenario (avg SNR)')
-        ax.set_title('Accuracy Heatmap by Scenario (all splits)')
-
-        # annotate cells with value and counts
-        for i in range(matrix_ord.shape[0]):
-            for j in range(matrix_ord.shape[1]):
-                v = matrix_ord[i, j]
-                if np.isnan(v):
+            any_ok = False
+            for suffix, splits_arg, title in plots:
+                outp = out_dir / f'model_scenario_heatmap__{suffix}.png'
+                try:
+                    generate_model_scenario_heatmap(perfs, models, outp, title=title, splits=splits_arg, show_snr_only_for_drone=True)
+                    artifacts.append(str(outp))
+                    any_ok = True
+                except Exception:
+                    # continue to next plot; we don't fail the whole plugin for one missing split
                     continue
-                txt = f'{v:.3f}\n({counts_ord[i,j]})'
-                ax.text(j, i, txt, ha='center', va='center', fontsize='8')
-
-        # draw vertical separator between drone and no-drone in scenarios
-        boundary = None
-        for i in range(1, len(drone_flags)):
-            if drone_flags[i-1] != drone_flags[i]:
-                boundary = i
-                break
-        if boundary is not None:
-            ax.axvline(boundary - 0.5, color='black', linewidth=2, zorder=5)
-
-        cbar = fig.colorbar(im, ax=ax)
-        cbar.set_label('Accuracy')
-        outp = out_dir / f'model_scenario_heatmap__all.png'
-        fig.tight_layout()
-        fig.savefig(str(outp), dpi=200, bbox_inches='tight')
-        plt.close(fig)
-        artifacts.append(str(outp))
+            if not any_ok:
+                vr = VizResult()
+                vr.skipped = True
+                vr.summary = {'reason': 'no heatmaps produced for any split'}
+                return vr
 
     except Exception as e:
         vr = VizResult()

@@ -253,7 +253,7 @@ def main():
     parser.add_argument('--stratified-validation', action='store_true', help='Enable distance-stratified validation')
     parser.add_argument('--use_class_weight', action='store_true', help='Compute class weights and apply sample_weight to fit')
     parser.add_argument('--max_epochs', type=int, default=config.MAX_EPOCHS, help='Maximum number of epochs to run (default: from config.py)')
-    parser.add_argument('--use_dynamic_weight', action='store_true', default=True, help='Enable dynamic positive-class weight scheduler (updates each epoch)')
+    parser.add_argument('--use_dynamic_weight', action='store_true', default=None, help='Enable dynamic positive-class weight scheduler (updates each epoch)')
     parser.add_argument('--dyn_base', type=float, default=1.0, help='Base weight multiplier for dynamic scheduler')
     parser.add_argument('--dyn_beta', type=float, default=0.8, help='EMA beta for dynamic scheduler (smoothing)')
     parser.add_argument('--dyn_min_w', type=float, default=0.01, help='Minimum clamp for dynamic positive weight')
@@ -301,8 +301,8 @@ def main():
         args.focal_alpha = args.focal_alpha if args.focal_alpha is not None else config.LOSS_DEFAULTS.get('focal_alpha', 0.75)
         args.focal_gamma = args.focal_gamma if args.focal_gamma is not None else config.LOSS_DEFAULTS.get('focal_gamma', 2.0)
         args.class_weight = args.class_weight if args.class_weight is not None else config.LOSS_DEFAULTS.get('class_weight_drone', 3.0)
-        if not hasattr(args, 'use_dynamic_weight'):
-            args.use_dynamic_weight = config.LOSS_DEFAULTS.get('use_dynamic_weight', True)
+        if getattr(args, 'use_dynamic_weight', None) is None:
+            args.use_dynamic_weight = config.LOSS_DEFAULTS.get('use_dynamic_weight', False)
     except Exception:
         pass
 
@@ -364,22 +364,42 @@ def main():
     
     # Callbacks
     early_stopping = EarlyStopping(
-        monitor='val_loss',
-        mode='min',
+        monitor='val_f1',
+        mode='max',
         patience=10,
         start_from_epoch=args.min_epochs,
         restore_best_weights=True
     )
-    
-    checkpoint = ModelCheckpoint(
+    lr_reducer = keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-7, verbose=1)
+    ckpt_f1 = ModelCheckpoint(
         MODEL_SAVE,
+        monitor='val_f1',
+        mode='max',
+        save_best_only=True,
+        verbose=1
+    )
+    try:
+        if str(MODEL_SAVE).endswith('.keras'):
+            ckpt_loss_path = str(MODEL_SAVE).replace('.keras', '.best_val_loss.keras')
+        else:
+            ckpt_loss_path = str(MODEL_SAVE) + '.best_val_loss'
+    except Exception:
+        ckpt_loss_path = str(MODEL_SAVE) + '.best_val_loss'
+    ckpt_loss = ModelCheckpoint(
+        ckpt_loss_path,
         monitor='val_loss',
         mode='min',
         save_best_only=True,
         verbose=1
     )
-    
-    callbacks_list = [early_stopping, checkpoint]
+
+    # Add a SafeEarlyStopping on val_loss to stop long runs if val_loss plateaus
+    try:
+        loss_early_stop = SafeEarlyStopping(start_from_epoch=getattr(args, 'min_epochs', 0), monitor='val_loss', mode='min', patience=8, restore_best_weights=True)
+    except Exception:
+        loss_early_stop = SafeEarlyStopping(monitor='val_loss', mode='min', patience=8, restore_best_weights=True)
+    # Distance-stratified validation callback (optional)
+    callbacks_list = [early_stopping, lr_reducer, loss_early_stop, ckpt_f1, ckpt_loss]
     
     # Distance-stratified validation
     if args.stratified_validation:
@@ -448,9 +468,16 @@ def main():
                 fn = c.get((1,0), 0)
             precision = precision_score(y_true, preds, zero_division=0)
             recall = recall_score(y_true, preds, zero_division=0)
-            print(colored(f"[EPOCH {epoch}] val_precision={precision:.4f} val_recall={recall:.4f} tp={tp} fp={fp} tn={tn} fn={fn}", "magenta"))
+            f1 = (2.0 * precision * recall) / (precision + recall) if (precision + recall) else 0.0
+            if logs is not None:
+                logs['val_precision'] = precision
+                logs['val_recall'] = recall
+                logs['val_f1'] = f1
+            print(colored(f"[EPOCH {epoch}] val_precision={precision:.4f} val_recall={recall:.4f} val_f1={f1:.4f} tp={tp} fp={fp} tn={tn} fn={fn}", "magenta"))
 
-    callbacks_list.append(ValMetricsCallback((X_val, y_val)))
+    # Prepend ValMetricsCallback so it injects `val_f1` into `logs` before other callbacks
+    val_metrics_cb = ValMetricsCallback((X_val, y_val))
+    callbacks_list = [val_metrics_cb] + callbacks_list
 
     # Respect max_epochs argument
     fit_kwargs['epochs'] = args.max_epochs

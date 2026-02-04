@@ -267,6 +267,67 @@ def optimize_threshold_balanced(
     return optimal["threshold"], optimal, all_results, relaxation_applied
 
 
+def _refine_thresholds_adaptive(y_true: np.ndarray, y_pred_proba: np.ndarray, seed_thresholds: list,
+                                threshold_min: float, threshold_max: float,
+                                iterations: int = 30, points: int = 200, window: float = 0.05,
+                                balance_target_delta: float = 0.03,
+                                max_balance_gap: float = 0.10,
+                                min_recall: float = 0.90,
+                                min_precision_drone: float = 0.70,
+                                min_precision_ambient: float = 0.85,
+                                stop_tol: float = 1e-7,
+                                verbose: bool = False):
+    """Refine thresholds by local adaptive grid search around seed_thresholds.
+
+    This method evaluates dense grids around each seed, selects the best candidate
+    using the same ranking used in `optimize_threshold_balanced`, and repeats
+    shrinking the window for a few iterations.
+    """
+    def rank_key(m):
+        gap = m["gap_to_target_delta"]
+        drone_worse = 1 if m["delta_drone_minus_ambient"] < 0 else 0
+        recall = -m["recall"]
+        bal_acc = -m["balanced_accuracy"]
+        f1 = -m["f1_score"]
+        thr = m["threshold"]
+        return (gap, drone_worse, recall, bal_acc, f1, thr)
+
+    best_overall = None
+    for seed in seed_thresholds:
+        lo = max(threshold_min, seed - window)
+        hi = min(threshold_max, seed + window)
+        best_local = None
+        prev_candidate_thr = None
+        for it in range(iterations):
+            grid = np.linspace(lo, hi, points)
+            results = []
+            for t in grid:
+                m = calculate_metrics(y_true, y_pred_proba, float(t))
+                delta = m["accuracy_drone"] - m["accuracy_ambient"]
+                m["delta_drone_minus_ambient"] = float(delta)
+                m["gap_to_target_delta"] = float(abs(delta - balance_target_delta))
+                results.append(m)
+            # filter by base floors/balance (kept simple: accept all, ranking will prefer good ones)
+            results.sort(key=rank_key)
+            candidate = results[0]
+            best_local = candidate if (best_local is None or rank_key(candidate) < rank_key(best_local)) else best_local
+            # shrink around candidate for next iter
+            cthr = float(candidate["threshold"])
+            span = max(1e-4, (hi - lo) / 4.0)
+            lo = max(threshold_min, cthr - span)
+            hi = min(threshold_max, cthr + span)
+            # (silent) early stopping: if candidate threshold hasn't moved significantly, stop
+            if prev_candidate_thr is not None:
+                if abs(prev_candidate_thr - cthr) < stop_tol:
+                    break
+            prev_candidate_thr = cthr
+
+        if best_overall is None or rank_key(best_local) < rank_key(best_overall):
+            best_overall = best_local
+
+    return best_overall
+
+
 def load_validation_predictions(model_name: str):
     """
     Load model and validation features, compute probabilities.
@@ -385,6 +446,19 @@ def main():
     p.add_argument("--threshold-min", type=float, default=0.05, help="Minimum threshold to test (default: 0.05)")
     p.add_argument("--threshold-max", type=float, default=0.95, help="Maximum threshold to test (default: 0.95)")
     p.add_argument("--threshold-step", type=float, default=0.01, help="Threshold step (default: 0.01)")
+    # Refinement: enabled by default; provide --no-refine to disable
+    p.add_argument("--no-refine", dest="refine", action="store_false",
+                   help="Disable local adaptive refinement (enabled by default)")
+    p.set_defaults(refine=True)
+    # Increase sensible defaults for high-precision refinement
+    p.add_argument("--refine-iterations", type=int, default=30,
+                   help="Refinement iterations (default: 30)")
+    p.add_argument("--refine-points", type=int, default=200,
+                   help="Points per refinement grid (default: 200)")
+    p.add_argument("--refine-window", type=float, default=0.05,
+                   help="Initial refinement half-window (default: 0.05)")
+    p.add_argument("--refine-stop-tol", type=float, default=1e-8,
+                   help="Stop tolerance for refinement when threshold change is below this (default: 1e-8)")
 
     p.add_argument("--output", type=str, default=None,
                    help="Output JSON file (default: results/calibrated_thresholds.json)")
@@ -437,6 +511,41 @@ def main():
                 threshold_step=args.threshold_step,
                 verbose=True,
             )
+
+            # Optional refinement stage: run local adaptive search around top candidates
+            if args.refine:
+                # choose top seeds from the discrete grid (few best by original ranking)
+                def rank_key_for_sort(m):
+                    gap = m["gap_to_target_delta"]
+                    drone_worse = 1 if m["delta_drone_minus_ambient"] < 0 else 0
+                    recall = -m["recall"]
+                    bal_acc = -m["balanced_accuracy"]
+                    f1 = -m["f1_score"]
+                    thrv = m["threshold"]
+                    return (gap, drone_worse, recall, bal_acc, f1, thrv)
+
+                all_results_sorted = sorted(all_results, key=rank_key_for_sort)
+                top_seeds = [r["threshold"] for r in all_results_sorted[:3]]  # refine around top-3
+                if len(top_seeds) > 0:
+                    refined = _refine_thresholds_adaptive(
+                        y_val, y_pred_proba, top_seeds,
+                        threshold_min=args.threshold_min, threshold_max=args.threshold_max,
+                        iterations=args.refine_iterations, points=args.refine_points, window=args.refine_window,
+                        balance_target_delta=args.balance_target_delta, max_balance_gap=args.max_balance_gap,
+                        min_recall=args.min_recall, min_precision_drone=args.min_precision_drone,
+                        min_precision_ambient=args.min_precision_ambient,
+                        stop_tol=args.refine_stop_tol,
+                        verbose=True,
+                    )
+                    if refined is not None:
+                        print(f"\nRefined threshold candidate: {refined['threshold']:.6f} (gap {refined['gap_to_target_delta']:.4f})")
+                        # replace optimal with refined if better by rank
+                        if rank_key_for_sort(refined) < rank_key_for_sort(optimal):
+                            thr = float(refined["threshold"]) 
+                            optimal = refined
+                            print("Refinement improved selection — using refined threshold.")
+                        else:
+                            print("Refinement did not improve selection; keeping discrete optimum.")
 
             calibration_data["models"][model_name] = {
                 "threshold": float(thr),

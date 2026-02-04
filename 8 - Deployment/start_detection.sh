@@ -213,8 +213,16 @@ case $MODE in
         
         if [ "$MODE" = "with_recording" ]; then
             echo -e "${GREEN}[Démarrage]${NC} Détecteur de drones..."
-            python3 drone_detector.py --continuous
+            python3 drone_detector.py --continuous &
             DETECTOR_PID=$!
+            
+            echo -e "${GREEN}✓${NC} Détecteur démarré (PID: $DETECTOR_PID)"
+            echo ""
+            echo "Appuyez sur Ctrl+C pour arrêter"
+            echo ""
+            
+            # Wait for processes (will be interrupted by cleanup)
+            wait
         fi
         ;;
         
@@ -233,9 +241,12 @@ case $MODE in
         echo "Appuyez sur Ctrl+C pour arrêter"
         echo ""
         
-        python3 drone_detector.py --continuous
+        python3 drone_detector.py --continuous &
+        DETECTOR_PID=$!
+        
+        # Wait for process (will be interrupted by cleanup)
+        wait
         ;;
 esac
 
-# Cleanup (in case script wasn't interrupted)
-cleanup
+# Note: cleanup function is called automatically via trap on exit

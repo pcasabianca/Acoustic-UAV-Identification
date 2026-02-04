@@ -14,6 +14,7 @@ import time
 import logging
 import numpy as np
 import librosa
+import soundfile as sf
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional
@@ -226,7 +227,7 @@ class DroneDetector:
             audio_path: Path to audio file
         
         Returns:
-            MEL spectrogram features (n_mels, time_frames) as defined in project `config.py`, or None if failed
+            MEL spectrogram features (44, 90) or None if failed
         """
         try:
             # Load audio
@@ -244,6 +245,21 @@ class DroneDetector:
             elif len(audio) > expected_samples:
                 # Trim if too long
                 audio = audio[:expected_samples]
+
+            # Normalize audio peak to target (default 0.95)
+            try:
+                target_peak = self.config.get('audio', {}).get('normalize_peak', 0.95)
+            except Exception:
+                target_peak = 0.95
+
+            try:
+                peak = float(np.max(np.abs(audio))) if audio.size > 0 else 0.0
+                if peak > 0 and target_peak > 0:
+                    scale = float(target_peak) / peak
+                    audio = audio * scale
+                    self.logger.debug(f"[AUDIO NORMALIZE] Applied scale {scale:.4f} to set peak {target_peak}")
+            except Exception as e:
+                self.logger.debug(f"Failed to normalize audio: {e}")
             
             # Extract MEL spectrogram
             mel_config = self.config['feature_extraction']['mel_spectrogram']
@@ -274,7 +290,7 @@ class DroneDetector:
         Run inference on all loaded models.
         
         Args:
-            features: MEL spectrogram (n_mels, time_frames) matching `config.py`
+            features: MEL spectrogram (44, 90)
         
         Returns:
             Dict of {model_name: drone_probability}
@@ -288,7 +304,7 @@ class DroneDetector:
                     model_info['threshold'] = calibrated_thresholds[calibrated_key]
         
         # Prepare input (add batch and channel dimensions)
-        X = features[np.newaxis, ..., np.newaxis]  # (1, n_mels, time_frames, 1) per `config.py`
+        X = features[np.newaxis, ..., np.newaxis]  # (1, 44, 90, 1)
         
         predictions = {}
         
@@ -376,6 +392,12 @@ class DroneDetector:
             Detection result dict or None if failed
         """
         self.logger.info(f"Processing: {audio_path.name}")
+
+        # Inspect audio file for basic health metrics (duration, sr, RMS, peak, clipping)
+        try:
+            self.inspect_audio_file(audio_path)
+        except Exception as e:
+            self.logger.warning(f"Audio inspection failed for {audio_path.name}: {e}")
         
         start_time = time.time()
         
@@ -411,6 +433,70 @@ class DroneDetector:
             self.save_prediction(result)
         
         return result
+
+    def inspect_audio_file(self, audio_path: Path):
+        """Read audio file and log diagnostic information useful to detect corrupt/buggy files.
+
+        Logs: sample rate, duration, channels, peak amplitude, RMS (and dB), clipping indicator.
+        """
+        try:
+            data, sr = sf.read(str(audio_path), always_2d=False)
+        except Exception as e:
+            raise
+
+        # Determine channels
+        if hasattr(data, 'ndim') and data.ndim == 1:
+            channels = 1
+        else:
+            channels = data.shape[1] if hasattr(data, 'shape') else 1
+
+        # Ensure numpy array
+        arr = np.asarray(data)
+        num_samples = arr.shape[0]
+        duration = float(num_samples) / float(sr) if sr > 0 else 0.0
+
+        # For multi-channel, compute metrics on mean across channels
+        if arr.ndim > 1:
+            mono = np.mean(arr, axis=1)
+        else:
+            mono = arr
+
+        peak = float(np.max(np.abs(mono))) if mono.size > 0 else 0.0
+        rms = float(np.sqrt(np.mean(np.square(mono)))) if mono.size > 0 else 0.0
+
+        # dBFS (0 dB = full scale). Handle zeros safely.
+        rms_db = 20.0 * np.log10(rms) if rms > 0 else float('-inf')
+        peak_db = 20.0 * np.log10(peak) if peak > 0 else float('-inf')
+
+        # Clipping detection: values near or at full-scale (>= 0.9999)
+        clipping = bool(np.any(np.abs(mono) >= 0.9999))
+
+        # Compute normalized metrics using same target as feature extraction (do not modify file)
+        try:
+            target_peak = float(self.config.get('audio', {}).get('normalize_peak', 0.95))
+        except Exception:
+            target_peak = 0.95
+
+        if peak > 0 and target_peak > 0:
+            scale = target_peak / peak
+            norm_peak = peak * scale
+            norm_rms = rms * scale
+            norm_peak_db = 20.0 * np.log10(norm_peak) if norm_peak > 0 else float('-inf')
+            norm_rms_db = 20.0 * np.log10(norm_rms) if norm_rms > 0 else float('-inf')
+        else:
+            scale = 0.0
+            norm_peak = 0.0
+            norm_rms = 0.0
+            norm_peak_db = float('-inf')
+            norm_rms_db = float('-inf')
+
+        # Log concise diagnostics with both original and normalized values
+        self.logger.info(
+            f"[AUDIO INSPECT] {audio_path.name} | dur: {duration:.2f}s | sr: {sr} | ch: {channels} | "
+            f"orig_peak: {peak:.4f} ({peak_db:.1f} dB) | orig_rms: {rms:.4f} ({rms_db:.1f} dB) | "
+            f"norm_peak: {norm_peak:.4f} ({norm_peak_db:.1f} dB) | norm_rms: {norm_rms:.4f} ({norm_rms_db:.1f} dB) | "
+            f"scale: {scale:.4f} | clipping: {clipping}"
+        )
     
     def log_detection(self, result: Dict):
         """Log detection result."""

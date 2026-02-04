@@ -7,7 +7,7 @@
   },
   "output": {
     "clean_before_build": true,
-    "total_samples": 60000,
+    "total_samples": 30000,
     "split_ratio": [
       0.8,
       0.1,
@@ -26,7 +26,7 @@
     "normalize_peak_dbfs": -1.0
   },
   "targets": {
-    "strict": true,
+    "strict": false,
     "label0_ratio": 0.5,
     "distance_bins_m": [
       0,
@@ -120,8 +120,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                14,
-                16
+                24
               ]
             }
           }
@@ -195,9 +194,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -272,10 +269,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -377,10 +371,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -481,10 +472,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -613,10 +601,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -759,9 +744,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -904,10 +887,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -1075,10 +1055,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -1248,10 +1225,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -1420,10 +1394,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -1590,10 +1561,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -1760,10 +1728,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -1809,7 +1774,7 @@
     "notes": [
       "Easy positives: shorter distances + higher air_cutoff + less noise/confusers -> models can learn discriminative cues.",
       "Hard positives: far (300-450m) + harsher ambience -> present but not dominating early learning.",
-      "ADC bits set to realistic [10,12,14,16] instead of [24,16]."
+      "ADC bits set to realistic [24] to match HW_DOMAIN_DEFAULTS."
     ]
   }
 }

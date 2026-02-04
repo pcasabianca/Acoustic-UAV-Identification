@@ -131,7 +131,7 @@ if __name__ == "__main__":
                        help='Enable distance-stratified validation (evaluates each distance separately)')
     parser.add_argument('--use_class_weight', action='store_true',
                        help='Automatically compute and pass class_weight to Keras (balanced)')
-    parser.add_argument('--use_dynamic_weight', action='store_true', default=True,
+    parser.add_argument('--use_dynamic_weight', action='store_true', default=None,
                        help='Enable dynamic positive-class weight scheduler (updates each epoch)')
     parser.add_argument('--dyn_base', type=float, default=1.0,
                        help='Base weight multiplier for dynamic scheduler')
@@ -155,8 +155,8 @@ if __name__ == "__main__":
         args.focal_alpha = args.focal_alpha if args.focal_alpha is not None else _cfg.LOSS_DEFAULTS.get('focal_alpha', 0.75)
         args.focal_gamma = args.focal_gamma if args.focal_gamma is not None else _cfg.LOSS_DEFAULTS.get('focal_gamma', 2.0)
         args.class_weight = args.class_weight if args.class_weight is not None else _cfg.LOSS_DEFAULTS.get('class_weight_drone', 3.0)
-        if not hasattr(args, 'use_dynamic_weight'):
-            args.use_dynamic_weight = _cfg.LOSS_DEFAULTS.get('use_dynamic_weight', True)
+        if getattr(args, 'use_dynamic_weight', None) is None:
+            args.use_dynamic_weight = _cfg.LOSS_DEFAULTS.get('use_dynamic_weight', False)
     except Exception:
         pass
     if args.loss == 'weighted_bce':
@@ -182,15 +182,28 @@ if __name__ == "__main__":
         except Exception as e:
             print(colored(f"[WARN] Could not compute class_weight: {e}", "yellow"))
 
-    # Early stopping with minimum epochs.
-    callback = keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, start_from_epoch=args.min_epochs)
+    # Early stopping (monitor val_f1) and learning-rate reducer (monitor val_loss)
+    from tools.safe_callbacks import SafeEarlyStopping
+    callback = SafeEarlyStopping(start_from_epoch=args.min_epochs, monitor='val_f1', mode='max', patience=10, restore_best_weights=True)
+    lr_reducer = keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-7, verbose=1)
 
-    # Checkpoint.
-    checkpoint = keras.callbacks.ModelCheckpoint(MODEL_SAVE, monitor='val_loss',
-                                                  mode='min', save_best_only=True, verbose=1)
-    
+    ckpt_f1 = keras.callbacks.ModelCheckpoint(MODEL_SAVE, monitor='val_f1', mode='max', save_best_only=True, verbose=1)
+    try:
+        if str(MODEL_SAVE).endswith('.keras'):
+            ckpt_loss_path = str(MODEL_SAVE).replace('.keras', '.best_val_loss.keras')
+        else:
+            ckpt_loss_path = str(MODEL_SAVE) + '.best_val_loss'
+    except Exception:
+        ckpt_loss_path = str(MODEL_SAVE) + '.best_val_loss'
+    ckpt_loss = keras.callbacks.ModelCheckpoint(ckpt_loss_path, monitor='val_loss', mode='min', save_best_only=True, verbose=1)
+
+    # Add SafeEarlyStopping on val_loss as fallback to stop long runs
+    try:
+        safe_es_loss = SafeEarlyStopping(start_from_epoch=args.min_epochs, monitor='val_loss', mode='min', patience=8, restore_best_weights=True)
+    except Exception:
+        safe_es_loss = SafeEarlyStopping(monitor='val_loss', mode='min', patience=8, restore_best_weights=True)
     # Distance-stratified validation callback (optional)
-    callbacks_list = [callback, checkpoint]
+    callbacks_list = [callback, lr_reducer, safe_es_loss, ckpt_f1, ckpt_loss]
     if args.stratified_validation:
         from distance_stratified_callback import DistanceStratifiedCallback
         stratified_callback = DistanceStratifiedCallback(
@@ -257,9 +270,19 @@ if __name__ == "__main__":
                 fn = c.get((1,0), 0)
             precision = precision_score(y_true, preds, zero_division=0)
             recall = recall_score(y_true, preds, zero_division=0)
-            print(colored(f"[EPOCH {epoch}] val_precision={precision:.4f} val_recall={recall:.4f} tp={tp} fp={fp} tn={tn} fn={fn}", "magenta"))
+            f1 = (2.0 * precision * recall) / (precision + recall) if (precision + recall) else 0.0
+            if logs is not None:
+                logs['val_precision'] = precision
+                logs['val_recall'] = recall
+                logs['val_f1'] = f1
+            print(colored(f"[EPOCH {epoch}] val_precision={precision:.4f} val_recall={recall:.4f} val_f1={f1:.4f} tp={tp} fp={fp} tn={tn} fn={fn}", "magenta"))
 
-    callbacks_list.append(ValMetricsCallback((X_validation, y_validation)))
+    # Instantiate ValMetricsCallback now that the class is defined and prepend it
+    try:
+        val_metrics_cb = ValMetricsCallback((X_validation, y_validation))
+        callbacks_list = [val_metrics_cb] + callbacks_list
+    except Exception as _e:
+        print(colored(f"[WARN] Could not create ValMetricsCallback: {_e}", "yellow"))
     if args.use_dynamic_weight:
         try:
             from dynamic_class_weight import DynamicClassWeightCallback

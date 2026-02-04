@@ -22,7 +22,11 @@ def highpass(audio, params, ctx=None):
     hz = float(params["hz"])
     sr = int(params["sr"])
     order = int(params.get("order", 4))
-    b, a = butter(order, hz / (sr / 2.0), btype="high")
+    wn = hz / (sr / 2.0)
+    if not (0.0 < wn < 1.0):
+        # invalid cutoff frequency for digital filter; skip op
+        return audio, {"highpass_hz_skipped": hz}
+    b, a = butter(order, wn, btype="high")
     out = lfilter(b, a, audio)
     return out, {"highpass_hz": hz}
 
@@ -35,7 +39,11 @@ def lowpass(audio, params, ctx=None):
     hz = float(params["hz"])
     sr = int(params["sr"])
     order = int(params.get("order", 4))
-    b, a = butter(order, hz / (sr / 2.0), btype="low")
+    wn = hz / (sr / 2.0)
+    if not (0.0 < wn < 1.0):
+        # invalid cutoff frequency for digital filter; skip op
+        return audio, {"lowpass_hz_skipped": hz}
+    b, a = butter(order, wn, btype="low")
     out = lfilter(b, a, audio)
     return out, {"lowpass_hz": hz}
 

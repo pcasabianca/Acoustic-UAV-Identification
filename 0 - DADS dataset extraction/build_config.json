@@ -69,7 +69,7 @@
   "scenarios": [
     {
       "name": "noise_easy_1amb_clean",
-      "weight": 0.3,
+      "weight": 0.31,
       "label": 0,
       "components": [
         {
@@ -120,8 +120,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                14,
-                16
+                24
               ]
             }
           }
@@ -195,9 +194,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -272,10 +269,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -377,10 +371,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -481,10 +472,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -613,10 +601,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -759,9 +744,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -904,10 +887,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -1075,10 +1055,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -1248,10 +1225,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -1420,10 +1394,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -1590,10 +1561,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -1760,10 +1728,7 @@
             "adc_bits": {
               "dist": "choice",
               "values": [
-                10,
-                12,
-                14,
-                16
+                24
               ]
             }
           }
@@ -1780,6 +1745,177 @@
             "sr": 22050
           }
         }
+      ]
+    },
+    {
+      "name": "drone_very_close_010_030_static",
+      "weight": 0.05,
+      "label": 1,
+      "components": [
+        {
+          "role": "drone",
+          "count": 1,
+          "chain_template": [
+            {
+              "op": "env_orch",
+              "params": {
+                "sr": 22050,
+                "distance_mode": "static",
+                "distance_m": {
+                  "dist": "uniform",
+                  "min": 10,
+                  "max": 30
+                },
+                "ref_m": 1.0,
+                "air_cutoff_hz": {
+                  "dist": "uniform",
+                  "min": 5000,
+                  "max": 12000
+                },
+                "doppler": {
+                  "enabled": false
+                }
+              }
+            },
+            {
+              "op": "drone_orch",
+              "params": {
+                "sr": 22050,
+                "flutter_db": {
+                  "dist": "uniform",
+                  "min": 0.0,
+                  "max": 0.5
+                },
+                "flutter_hz": {
+                  "dist": "uniform",
+                  "min": 0.4,
+                  "max": 1.0
+                }
+              }
+            },
+            {
+              "op": "gain_db",
+              "params": {
+                "db": {
+                  "dist": "uniform",
+                  "min": -3,
+                  "max": 3
+                }
+              }
+            }
+          ]
+        },
+        {
+          "role": "ambient",
+          "count": 1,
+          "chain_template": [
+            {
+              "op": "gain_db",
+              "params": {
+                "db": {
+                  "dist": "uniform",
+                  "min": -6,
+                  "max": 0
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "global_chain_template": [
+        {
+          "op": "hardware_orch",
+          "params": {
+            "sr": 22050,
+            "hp_hz": {
+              "dist": "choice",
+              "values": [
+                null,
+                20
+              ]
+            },
+            "noise_rms_dbfs": {
+              "dist": "choice",
+              "values": [
+                -95,
+                -90,
+                -85,
+                -80,
+                -76
+              ]
+            },
+            "adc_bits": {
+              "dist": "choice",
+              "values": [
+                24
+              ]
+            }
+          }
+        },
+        {
+          "op": "normalize_peak",
+          "params": {
+            "target_dbfs": -3.0
+          }
+        },
+        {
+          "op": "stats",
+          "params": {
+            "sr": 22050
+          }
+        }
+      ]
+    },
+    {
+      "name": "drone_pure_close",
+      "weight": 0.02,
+      "label": 1,
+      "components": [
+        {
+          "role": "drone",
+          "count": 1,
+          "chain_template": [
+            {
+              "op": "env_orch",
+              "params": {
+                "sr": 22050,
+                "distance_mode": "static",
+                "distance_m": {
+                  "dist": "choice",
+                  "values": [5]
+                },
+                "ref_m": 1.0,
+                "air_cutoff_hz": {
+                  "dist": "choice",
+                  "values": [8000]
+                },
+                "doppler": { "enabled": false }
+              }
+            },
+            {
+              "op": "drone_orch",
+              "params": {
+                "sr": 22050,
+                "flutter_db": { "dist": "uniform", "min": 0.0, "max": 0.2 },
+                "flutter_hz": { "dist": "uniform", "min": 0.2, "max": 0.6 }
+              }
+            },
+            { "op": "gain_db", "params": { "db": { "dist": "uniform", "min": -1, "max": 1 } } }
+          ]
+        }
+      ],
+      "global_chain_template": [
+        {
+          "op": "hardware_orch",
+          "params": {
+            "sr": 22050,
+            "hp_hz": { "dist": "choice", "values": [null] },
+            "noise_rms_dbfs": { "dist": "choice", "values": [-95] },
+            "adc_bits": { "dist": "choice", "values": [24] }
+          }
+        },
+        { "op": "normalize_peak", "params": { "target_dbfs": -1.0 } },
+        { "op": "stats", "params": { "sr": 22050 } }
       ]
     }
   ],
@@ -1809,7 +1945,7 @@
     "notes": [
       "Easy positives: shorter distances + higher air_cutoff + less noise/confusers -> models can learn discriminative cues.",
       "Hard positives: far (300-450m) + harsher ambience -> present but not dominating early learning.",
-      "ADC bits set to realistic [10,12,14,16] instead of [24,16]."
+      "ADC bits set to realistic [24] to match HW_DOMAIN_DEFAULTS."
     ]
   }
 }

@@ -152,8 +152,8 @@ if __name__ == "__main__":
                         choices=['bce', 'weighted_bce', 'focal', 'recall_focused'],
                         help='Loss function to use')
     parser.add_argument('--epochs', type=int, default=config.MAX_EPOCHS, help='Number of epochs')
-    parser.add_argument('--use_dynamic_weight', action='store_true', default=True,
-                        help='Enable dynamic positive-class weight scheduler (updates each epoch)')
+    parser.add_argument('--use_dynamic_weight', action='store_true', default=None,
+                       help='Enable dynamic positive-class weight scheduler (updates each epoch)')
     parser.add_argument('--dyn_base', type=float, default=1.0,
                         help='Base weight multiplier for dynamic scheduler')
     parser.add_argument('--dyn_beta', type=float, default=0.8,
@@ -193,10 +193,61 @@ if __name__ == "__main__":
     class_weights = dict(enumerate(class_weights_array))
     print(f"[INFO] Class weights (balanced): {class_weights}")
 
-    # Callbacks
-    early_stop = keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
-    reduce_lr = keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-7)
-    callbacks = [early_stop, reduce_lr]
+    # Callbacks: monitor val_f1 for early stopping/checkpoint, reduce LR on val_loss
+    from tools.safe_callbacks import SafeEarlyStopping
+    early_stop = SafeEarlyStopping(monitor='val_f1', mode='max', patience=10, restore_best_weights=True, start_from_epoch=getattr(args, 'min_epochs', 0))
+    reduce_lr = keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-7, verbose=1)
+    try:
+        model_save_str = str(MODEL_SAVE)
+    except Exception:
+        model_save_str = MODEL_SAVE
+    ckpt_f1 = keras.callbacks.ModelCheckpoint(model_save_str, monitor='val_f1', mode='max', save_best_only=True, verbose=1)
+    if isinstance(model_save_str, str) and model_save_str.endswith('.keras'):
+        ckpt_loss_path = model_save_str.replace('.keras', '.best_val_loss.keras')
+    else:
+        ckpt_loss_path = str(model_save_str) + '.best_val_loss'
+    ckpt_loss = keras.callbacks.ModelCheckpoint(ckpt_loss_path, monitor='val_loss', mode='min', save_best_only=True, verbose=1)
+    # Add a SafeEarlyStopping on val_loss to stop long runs if val_loss plateaus
+    try:
+        loss_early_stop = SafeEarlyStopping(start_from_epoch=getattr(args, 'min_epochs', 0), monitor='val_loss', mode='min', patience=8, restore_best_weights=True)
+    except Exception:
+        loss_early_stop = SafeEarlyStopping(monitor='val_loss', mode='min', patience=8, restore_best_weights=True)
+    # We'll prepend ValMetricsCallback so val_f1 is injected before other callbacks run
+    callbacks = [early_stop, reduce_lr, loss_early_stop, ckpt_f1, ckpt_loss]
+
+    # Val metrics callback to compute val_f1 and inject into logs
+    from sklearn.metrics import precision_score, recall_score, confusion_matrix
+    class ValMetricsCallback(keras.callbacks.Callback):
+        def __init__(self, val_data):
+            super().__init__()
+            self.x_val, self.y_val = val_data
+        def on_epoch_end(self, epoch, logs=None):
+            preds = self.model.predict(self.x_val, verbose=0)
+            if preds.ndim > 1 and preds.shape[-1] > 1:
+                preds = np.argmax(preds, axis=1)
+            else:
+                preds = (preds.reshape(-1) >= 0.5).astype(int)
+            y_true = np.array(self.y_val, dtype=int)
+            try:
+                tn, fp, fn, tp = confusion_matrix(y_true, preds).ravel()
+            except Exception:
+                from collections import Counter
+                c = Counter(zip(y_true, preds))
+                tp = c.get((1,1), 0)
+                tn = c.get((0,0), 0)
+                fp = c.get((0,1), 0)
+                fn = c.get((1,0), 0)
+            precision = precision_score(y_true, preds, zero_division=0)
+            recall = recall_score(y_true, preds, zero_division=0)
+            f1 = (2.0 * precision * recall) / (precision + recall) if (precision + recall) else 0.0
+            if logs is not None:
+                logs['val_precision'] = precision
+                logs['val_recall'] = recall
+                logs['val_f1'] = f1
+            print(f"[EPOCH {epoch}] val_precision={precision:.4f} val_recall={recall:.4f} val_f1={f1:.4f} tp={tp} fp={fp} tn={tn} fn={fn}")
+    # Prepend ValMetricsCallback to ensure `val_f1` is available to EarlyStopping/ModelCheckpoint
+    val_metrics_cb = ValMetricsCallback((X_validation, y_validation))
+    callbacks = [val_metrics_cb] + callbacks
 
     # Dynamic scheduler (enabled by default)
     if getattr(args, 'use_dynamic_weight', False):

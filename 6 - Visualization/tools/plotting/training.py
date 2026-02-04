@@ -51,7 +51,9 @@ def plot_learning_curves(df, model_name: str, out_dir: Optional[str] = None):
     # Loss
     ax = axes[0, 0]
     plotted_loss = False
-    if _find_col(df, 'loss'):
+    loss_present = _find_col(df, 'loss') is not None
+    val_loss_present = _find_col(df, 'val_loss') is not None
+    if loss_present:
         col = _find_col(df, 'loss')
         raw = df[col].values.astype(float)
         # plot raw in background with 50% transparency
@@ -59,13 +61,32 @@ def plot_learning_curves(df, model_name: str, out_dir: Optional[str] = None):
         series = _smooth_series(raw)
         ax.plot(epochs, series, label='train_loss', linewidth=1.5)
         plotted_loss = True
-    if _find_col(df, 'val_loss'):
+    if val_loss_present:
         col = _find_col(df, 'val_loss')
         raw = df[col].values.astype(float)
         ax.plot(epochs, raw, color='C1', alpha=0.5, linewidth=0.8)
         series = _smooth_series(raw)
         ax.plot(epochs, series, label='val_loss', linewidth=1.5)
         plotted_loss = True
+    # also plot the overfit gap on the loss subplot and mark the epoch of maximum gap
+    if loss_present and val_loss_present:
+        try:
+            raw_gap = df[_find_col(df, 'val_loss')].astype(float).values - df[_find_col(df, 'loss')].astype(float).values
+            sg = _smooth_series(raw_gap)
+            ax2 = ax.twinx()
+            ax2.plot(epochs, sg, color='C4', linewidth=1.0, label='val_loss - train_loss')
+            ax2.axhline(0.0, color='k', linewidth=0.6, alpha=0.5)
+            try:
+                idx = int(np.nanargmax(sg))
+                ax2.scatter([epochs[idx]], [sg[idx]], color='C3', s=40, zorder=5)
+                ax2.annotate(f'max gap {sg[idx]:.4f} (ep {int(epochs[idx])})', xy=(epochs[idx], sg[idx]), xytext=(10, 10), textcoords='offset points', fontsize=9, arrowprops=dict(arrowstyle='->', lw=0.8))
+            except Exception:
+                pass
+            ax2.set_ylabel('Gap', fontsize=9)
+            ax2.tick_params(axis='y', labelsize=fontsize_ticks)
+            ax2.legend(loc='upper right', fontsize='small')
+        except Exception:
+            pass
     ax.set_title('Loss', fontsize=fontsize_title)
     ax.grid(True, alpha=0.25)
     if plotted_loss:

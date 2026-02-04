@@ -215,9 +215,12 @@ AUGMENTATION_MAX_WORKERS = int(_os.environ.get('AUGMENTATION_WORKERS', _os.cpu_c
 
 # Training parameters (centralized)
 MIN_EPOCHS = 10  # Minimum epochs before early stopping can trigger
-MAX_EPOCHS = 1000  # Maximum epochs limit
-BATCH_SIZE = 128  # Default batch size for training
-LEARNING_RATE = 0.0005  # Default learning rate
+MAX_EPOCHS = 250  # Maximum epochs limit
+# Reduce default batch size to introduce more gradient noise and improve
+# generalization on smaller datasets / limited augmentation.
+BATCH_SIZE = 32  # Default batch size for training
+# Learning rate (default for all models)
+LEARNING_RATE = 0.0001  # Default learning rate
 
 # WAV write subtype used by augmentation/save routines (must be a valid subtype for soundfile)
 # Examples: 'PCM_16', 'FLOAT'
@@ -239,12 +242,16 @@ DEFAULT_OOD_FRACTIONS = {
 
 # R2 domain randomization defaults (hardware + propagation)
 HW_DOMAIN_DEFAULTS = {
-    'hpf_hz_range': [50.0, 200.0],
-    'noise_floor_db_range': [-75.0, -50.0],
-    'fr_tilt_db_per_oct_range': [-3.0, 3.0],
-    'notch_count_range': [0, 2],
-    'notch_depth_db_range': [1.0, 3.0],
-    'adc_bits_choices': [16, 24]
+    # Tuned defaults for high-quality ADC (24-bit) + good MEMS microphone
+    'hpf_hz_range': [20.0, 80.0],
+    # Lower noise floor to reflect good MEMS + clean preamp
+    'noise_floor_db_range': [-95.0, -70.0],
+    # Minimal tilt per octave for high-fidelity MEMS
+    'fr_tilt_db_per_oct_range': [-1.0, 1.0],
+    'notch_count_range': [0, 1],
+    'notch_depth_db_range': [0.5, 2.0],
+    # Prefer 24-bit ADC choices for high-quality hardware
+    'adc_bits_choices': [24]
 }
 
 PROP_DOMAIN_DEFAULTS = {
@@ -320,10 +327,9 @@ TARGET_RECALL = 0.95  # Target recall for threshold calibration (fallback when u
 
 # --- Training parameters (source of truth) --------------------------------
 # Batch size for training (used by all trainers when no CLI arg provided)
-# With 27 GB RAM available, we can use larger batch sizes for better training
-# CNN/RNN/CRNN: Can handle batch_size=128+ comfortably
-# Attention_CRNN: More memory-intensive, batch_size=128 safe with 21+ GB available
-BATCH_SIZE = 128  # Optimized for 12-core CPU + 21 GB RAM available
+# With reduced default batch size to introduce more gradient noise and improve
+# generalization on smaller datasets / limited augmentation.
+BATCH_SIZE = 32  # Default batch size for training
 
 # Learning rate (default for all models)
 LEARNING_RATE = 0.0001
@@ -333,10 +339,14 @@ LEARNING_RATE = 0.0001
 # are not provided so `config.py` is the single source of truth.
 LOSS_DEFAULTS = {
     'loss_type': 'focal',           # 'bce' | 'weighted_bce' | 'focal' | 'recall_focused'
-    'focal_alpha': 0.75,
+    # Focal settings tuned for balanced emphasis on hard examples while
+    # avoiding an excessive push to predict positive for all examples.
+    'focal_alpha': 0.60,
     'focal_gamma': 2.0,
-    'class_weight_drone': 3.0,
-    'use_dynamic_weight': True
+    # keep static class weight conservative when using focal; dynamic weighting
+    # is disabled by default to avoid runaway shifts during early training.
+    'class_weight_drone': 2.0,
+    'use_dynamic_weight': False
 }
 
 # Save training metadata alongside saved models
@@ -357,6 +367,17 @@ DEFAULT_DISTANCE_WEIGHTS = {
 # Enforce usage of precomputed features only. When True, any code path that would
 # compute MELs on-the-fly should instead read `mel_test_index.json` or fail.
 PRECOMPUTED_ONLY = True
+
+# Defaults for ReduceLROnPlateau to be attached by trainers when desired.
+REDUCE_LR_ON_PLATEAU = {
+    'monitor': 'val_loss',
+    'factor': 0.5,
+    'patience': 3,
+    'min_lr': 1e-7,
+    'cooldown': 1,
+    'verbose': 1,
+    'mode': 'min'
+}
 
 # Ensemble voting configuration
 # PHASE 2A: Optimized weights based on distance performance analysis
