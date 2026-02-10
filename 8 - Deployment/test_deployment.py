@@ -33,9 +33,9 @@ def test_config():
         
         for section in required:
             if section in config:
-                print(f"  ✓ Section '{section}' present")
+                print(f"  [OK] Section '{section}' present")
             else:
-                print(f"  ✗ Section '{section}' MISSING!")
+                print(f"  [MISSING] Section '{section}' MISSING!")
                 all_ok = False
         
         return all_ok
@@ -57,9 +57,9 @@ def test_directories():
     for dir_name in required_dirs:
         dir_path = Path(dir_name)
         if dir_path.exists():
-            print(f"  ✓ Directory '{dir_name}' exists")
+            print(f"  [OK] Directory '{dir_name}' exists")
         else:
-            print(f"  ✗ Directory '{dir_name}' missing!")
+            print(f"  [MISSING] Directory '{dir_name}' missing!")
             all_ok = False
     
     return all_ok
@@ -74,20 +74,20 @@ def test_models():
     models_dir = Path("models")
     
     if not models_dir.exists():
-        print("  ✗ Models directory not found!")
+        print("  [MISSING] Models directory not found!")
         return False
     
     model_files = list(models_dir.glob("*.keras"))
     
     if not model_files:
-        print("  ✗ No model files found!")
-        print("  → Run ./setup_deployment.sh to copy models")
+        print("  [MISSING] No model files found!")
+        print("  -> Run ./setup_deployment.sh to copy models")
         return False
     
     print(f"  Found {len(model_files)} model(s):")
     for model_file in model_files:
         size_mb = model_file.stat().st_size / (1024 * 1024)
-        print(f"    • {model_file.name} ({size_mb:.2f} MB)")
+        print(f"    - {model_file.name} ({size_mb:.2f} MB)")
     
     return True
 
@@ -109,9 +109,9 @@ def test_dependencies():
     for module_name, display_name in dependencies.items():
         try:
             __import__(module_name)
-            print(f"  ✓ {display_name} installed")
+            print(f"  [OK] {display_name} installed")
         except ImportError:
-            print(f"  ✗ {display_name} NOT installed!")
+            print(f"  [MISSING] {display_name} NOT installed!")
             all_ok = False
     
     # Optional dependencies
@@ -123,9 +123,9 @@ def test_dependencies():
     for module_name, display_name in optional.items():
         try:
             __import__(module_name)
-            print(f"    ✓ {display_name}")
+            print(f"    [OK] {display_name}")
         except ImportError:
-            print(f"    ⊗ {display_name} (not needed for file monitoring)")
+            print(f"    [MISSING] {display_name} (not needed for file monitoring)")
     
     return all_ok
 
@@ -139,18 +139,18 @@ def test_detector_import():
     detector_path = Path("drone_detector.py")
     
     if not detector_path.exists():
-        print("  ✗ drone_detector.py not found!")
+        print("  [MISSING] drone_detector.py not found!")
         return False
-    
-    print(f"  ✓ drone_detector.py exists")
+
+    print(f"  [OK] drone_detector.py exists")
     
     # Try to import (syntax check)
     try:
         import drone_detector
-        print(f"  ✓ Script imports successfully")
+        print(f"  [OK] Script imports successfully")
         return True
     except Exception as e:
-        print(f"  ✗ Import failed: {e}")
+        print(f"  [ERROR] Import failed: {e}")
         return False
 
 
@@ -173,8 +173,8 @@ def test_sample_audio():
             break
     
     if not sample_found:
-        print("  ⊗ No sample audio found (skipped)")
-        print("    → Copy a WAV file to audio_input/ to test manually")
+        print("  [MISSING] No sample audio found (skipped)")
+        print("    -> Copy a WAV file to audio_input/ to test manually")
         return True  # Not a failure
     
     print(f"  Found sample: {Path(sample_found).name}")
@@ -234,7 +234,7 @@ def main():
     print("=" * 70)
     
     for test_name, passed in results.items():
-        status = "✅ PASS" if passed else "❌ FAIL"
+        status = "PASS" if passed else "FAIL"
         print(f"  {status}: {test_name}")
     
     total = len(results)
@@ -245,20 +245,20 @@ def main():
     print("=" * 70)
     
     if passed == total:
-        print("\n🎉 All tests passed! Ready for deployment.")
+        print("\nAll tests passed! Ready for deployment.")
         print("\nNext steps:")
         print("  1. Transfer to Raspberry Pi:")
         print("     scp -r . pi@raspberrypi:/home/pi/drone-detection/")
         print("\n  2. On Raspberry Pi, run:")
         print("     python3 drone_detector.py --continuous")
     else:
-        print("\n⚠️  Some tests failed. Please fix issues before deployment.")
+        print("\nSome tests failed. Please fix issues before deployment.")
         
         if not results['Models']:
-            print("\n💡 Tip: Run ./setup_deployment.sh to copy trained models")
+            print("\nTip: Run ./setup_deployment.sh to copy trained models")
         
         if not results['Dependencies']:
-            print("\n💡 Tip: Install dependencies with:")
+            print("\nTip: Install dependencies with:")
             print("     pip3 install tensorflow librosa numpy")
     
     return 0 if passed == total else 1

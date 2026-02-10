@@ -198,12 +198,6 @@ if "%MODE%"=="with_recording" (
         echo Basculement en mode detection seule...
         set MODE=detection_only
         timeout /t 3 >nul
-    ) else (
-        echo [Demarrage] Enregistreur audio...
-        start /b python audio_recorder.py --interval 5 --duration 4 >logs\recorder.log 2>&1
-        timeout /t 2 >nul
-        echo OK - Enregistreur demarre
-        echo.
     )
 )
 
@@ -223,6 +217,11 @@ if "%MODE%"=="detection_only" (
 )
 
 echo [Demarrage] Detecteur de drones...
-python drone_detector.py --continuous
+
+if "%MODE%"=="with_recording" (
+    python drone_detector.py --continuous --with-recording
+) else (
+    python drone_detector.py --continuous
+)
 
 endlocal

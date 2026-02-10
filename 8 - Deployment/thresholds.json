@@ -1,59 +1,68 @@
 {
-  "version": "1.0",
-  "description": "Deployment thresholds configuration - modify these values on-the-fly",
-  "last_updated": "2026-01-11",
+  "version": "2.0",
+  "description": "Deployment thresholds configuration - CALIBRATED from trainers (2026-02-03)",
+  "last_updated": "2026-02-05",
+  "calibration_mode": "balanced_per_class_accuracy_gap_to_target",
   "models": {
-    "CNN": {
-      "threshold": 0.40,
-      "description": "Original CNN model",
-      "f1_score": 0.92,
-      "accuracy": 0.915
+    "cnn_model": {
+      "threshold": 0.504,
+      "description": "CNN model",
+      "f1_score": 0.629,
+      "accuracy": 0.604,
+      "balanced_accuracy": 0.604
     },
-    "RNN": {
-      "threshold": 0.38,
-      "description": "Original RNN model",
-      "f1_score": 0.84,
-      "accuracy": 0.772
+    "rnn_model": {
+      "threshold": 0.511,
+      "description": "RNN model",
+      "f1_score": 0.574,
+      "accuracy": 0.567,
+      "balanced_accuracy": 0.567
     },
-    "CRNN": {
-      "threshold": 0.37,
-      "description": "Original CRNN model",
-      "f1_score": 0.91,
-      "accuracy": 0.905
+    "crnn_model": {
+      "threshold": 0.496,
+      "description": "CRNN model",
+      "f1_score": 0.628,
+      "accuracy": 0.622,
+      "balanced_accuracy": 0.622
     },
-    "Attention-CRNN": {
-      "threshold": 0.42,
-      "description": "Original Attention-CRNN model",
-      "f1_score": 0.93,
-      "accuracy": 0.914
+    "attention_crnn_model": {
+      "threshold": 0.508,
+      "description": "Attention-CRNN model",
+      "f1_score": 0.634,
+      "accuracy": 0.628,
+      "balanced_accuracy": 0.628
     },
-    "new_CNN": {
-      "threshold": 0.40,
-      "description": "NEW CNN (trained Jan 10-11, 2026)",
-      "f1_score": 0.92,
-      "accuracy": 0.915
+    "conformer_model": {
+      "threshold": 0.534,
+      "description": "Conformer model",
+      "f1_score": 0.624,
+      "accuracy": 0.618,
+      "balanced_accuracy": 0.618
     },
-    "new_RNN": {
-      "threshold": 0.38,
-      "description": "NEW RNN (trained Jan 10-11, 2026)",
-      "f1_score": 0.84,
-      "accuracy": 0.772
+    "tcn_model": {
+      "threshold": 0.500,
+      "description": "TCN model",
+      "f1_score": 0.658,
+      "accuracy": 0.517,
+      "balanced_accuracy": 0.517
     },
-    "new_CRNN": {
-      "threshold": 0.37,
-      "description": "NEW CRNN (trained Jan 10-11, 2026)",
-      "f1_score": 0.91,
-      "accuracy": 0.905
+    "efficientnet_model": {
+      "threshold": 0.521,
+      "description": "EfficientNet model",
+      "f1_score": 0.623,
+      "accuracy": 0.617,
+      "balanced_accuracy": 0.617
     },
-    "new_Attention-CRNN": {
-      "threshold": 0.42,
-      "description": "NEW Attention-CRNN (trained Jan 10-11, 2026)",
-      "f1_score": 0.93,
-      "accuracy": 0.914
+    "mobilenet_model": {
+      "threshold": 0.465,
+      "description": "MobileNet model",
+      "f1_score": 0.613,
+      "accuracy": 0.607,
+      "balanced_accuracy": 0.607
     }
   },
   "notes": [
-    "Thresholds are calibrated values from Jan 11, 2026 run_full_pipeline",
+    "Thresholds are calibrated values from Feb 04, 2026 deployment update",
     "Modify threshold values and they will be reloaded automatically if reload_thresholds_every_prediction=true",
     "Each model has its own threshold - you can tune them independently",
     "F1 scores and accuracy values are from test set performance"

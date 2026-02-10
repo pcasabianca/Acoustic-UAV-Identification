@@ -25,10 +25,53 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Try to activate virtual environment if it exists
-if [ -f "../.venv/bin/activate" ]; then
-    source "../.venv/bin/activate"
-    echo -e "${GREEN}✓${NC} Virtual environment activated"
+# Function to check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Function to propose setup
+propose_setup() {
+    echo ""
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}  ENVIRONNEMENT NON CONFIGURÉ${NC}"
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo "Le système détecte que l'environnement n'est pas correctement configuré."
+    echo ""
+    echo "Voulez-vous lancer l'installation automatique ?"
+    echo -e "  ${GREEN}./setup_deployment.sh${NC}"
+    echo ""
+    echo -n "Lancer setup maintenant ? (y/n) "
+    read -r response
+    
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+        echo ""
+        chmod +x setup_deployment.sh
+        ./setup_deployment.sh
+        echo ""
+        echo -e "${GREEN}Setup terminé ! Relancez ce script.${NC}"
+        exit 0
+    else
+        echo ""
+        echo -e "${RED}Installation annulée. Configurez l'environnement manuellement.${NC}"
+        exit 1
+    fi
+}
+
+# Try to activate conda environment
+if command_exists conda; then
+    # Source conda
+    CONDA_BASE=$(conda info --base 2>/dev/null)
+    if [ -n "$CONDA_BASE" ]; then
+        source "$CONDA_BASE/etc/profile.d/conda.sh"
+        
+        # Activate drone environment if exists
+        if conda env list | grep -q "^drone "; then
+            conda activate drone
+            echo -e "${GREEN}✓${NC} Conda environment 'drone' activated"
+        fi
+    fi
 fi
 
 # Trap to cleanup on exit
@@ -60,39 +103,38 @@ echo "========================================================================"
 echo ""
 
 # Check Python
-if ! command -v python3 &> /dev/null; then
-    echo -e "${RED}[ERROR]${NC} Python 3 n'est pas installé!"
-    exit 1
+echo -e "${BLUE}[1/4]${NC} Vérification de Python..."
+if ! command_exists python && ! command_exists python3; then
+    echo -e "${RED}✗ Python n'est pas installé!${NC}"
+    propose_setup
 fi
 
+# Use python3 or python
+PYTHON_CMD=$(command_exists python3 && echo "python3" || echo "python")
+echo -e "${GREEN}✓${NC} Python OK ($($PYTHON_CMD --version))"
+
 # Check dependencies
-echo -e "${BLUE}[1/4]${NC} Vérification des dépendances..."
+echo -e "${BLUE}[2/4]${NC} Vérification des dépendances..."
 
 MISSING_DEPS=()
 
-python3 -c "import tensorflow" 2>/dev/null || MISSING_DEPS+=("tensorflow")
-python3 -c "import librosa" 2>/dev/null || MISSING_DEPS+=("librosa")
-python3 -c "import numpy" 2>/dev/null || MISSING_DEPS+=("numpy")
-python3 -c "import soundfile" 2>/dev/null || MISSING_DEPS+=("soundfile")
+$PYTHON_CMD -c "import tensorflow" 2>/dev/null || MISSING_DEPS+=("tensorflow")
+$PYTHON_CMD -c "import librosa" 2>/dev/null || MISSING_DEPS+=("librosa")
+$PYTHON_CMD -c "import numpy" 2>/dev/null || MISSING_DEPS+=("numpy")
+$PYTHON_CMD -c "import soundfile" 2>/dev/null || MISSING_DEPS+=("soundfile")
 
 if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
-    echo -e "${RED}[ERROR]${NC} Dépendances manquantes: ${MISSING_DEPS[@]}"
-    echo ""
-    echo "Installation requise:"
-    echo "  pip3 install tensorflow librosa numpy soundfile"
-    echo ""
-    echo "Sur Raspberry Pi, utiliser TensorFlow Lite:"
-    echo "  pip3 install tensorflow-lite librosa numpy soundfile"
-    exit 1
+    echo -e "${RED}✗ Dépendances manquantes: ${MISSING_DEPS[@]}${NC}"
+    propose_setup
 fi
 
 echo -e "${GREEN}✓${NC} Toutes les dépendances sont installées"
 
 # Check models
-echo -e "${BLUE}[2/4]${NC} Vérification des modèles..."
+echo -e "${BLUE}[3/4]${NC} Vérification des modèles..."
 
 if [ ! -d "models" ] || [ -z "$(ls -A models/*.keras 2>/dev/null)" ]; then
-    echo -e "${RED}[ERROR]${NC} Aucun modèle trouvé dans models/"
+    echo -e "${RED}✗ Aucun modèle trouvé dans models/${NC}"
     echo ""
     echo "Les modèles doivent être présents dans le dossier 'models/'"
     echo "Si vous transférez ce dossier depuis la machine d'entraînement,"
@@ -104,7 +146,7 @@ MODEL_COUNT=$(ls -1 models/*.keras 2>/dev/null | wc -l)
 echo -e "${GREEN}✓${NC} $MODEL_COUNT modèle(s) trouvé(s)"
 
 # Check config
-echo -e "${BLUE}[3/4]${NC} Vérification de la configuration..."
+echo -e "${BLUE}[4/4]${NC} Vérification de la configuration..."
 
 if [ ! -f "deployment_config.json" ]; then
     echo -e "${RED}[ERROR]${NC} Fichier deployment_config.json manquant!"

@@ -39,6 +39,9 @@ from tensorflow import keras
 from tensorflow.keras import layers, models
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 from sklearn.utils.class_weight import compute_class_weight
+# SafeEarlyStopping ensures stable EarlyStopping behavior across callbacks
+sys.path.insert(0, str(Path(__file__).parent.parent / 'tools'))
+from tools.safe_callbacks import SafeEarlyStopping
 
 # Limit TensorFlow memory growth to prevent OOM crashes
 gpus = tf.config.list_physical_devices('GPU')

@@ -6,16 +6,17 @@
     "sample_rate": 22050,
     "duration_seconds": 4,
     "channels": 1,
+    "normalize_peak": 0.95,
     "input_directory": "./audio_input",
     "file_pattern": "*.wav",
-    "delete_after_processing": false
+    "delete_after_processing": true
   },
   
   "detection": {
-    "scan_interval_seconds": 5,
+    "scan_interval_seconds": 4,
     "confidence_threshold_default": 0.5,
     "thresholds_file": "./thresholds.json",
-    "enabled_models": ["CNN", "RNN", "CRNN", "Attention-CRNN", "new_CNN", "new_RNN", "new_CRNN", "new_Attention-CRNN"],
+    "enabled_models": ["CNN", "RNN", "CRNN", "Attention-CRNN", "tcn", "efficientnet", "mobilenet"],
     "voting_strategy": "majority",
     "min_consecutive_detections": 2,
     "reload_thresholds_every_prediction": true,
@@ -28,50 +29,51 @@
       "CNN": {
         "filename": "cnn_model.keras",
         "architecture": "CNN",
-        "description": "Original CNN model",
-        "calibrated_key": "CNN"
+        "description": "CNN model",
+        "calibrated_key": "cnn_model"
       },
       "RNN": {
         "filename": "rnn_model.keras",
         "architecture": "RNN",
-        "description": "Original RNN model",
-        "calibrated_key": "RNN"
+        "description": "RNN model",
+        "calibrated_key": "rnn_model"
       },
       "CRNN": {
         "filename": "crnn_model.keras",
         "architecture": "CRNN",
-        "description": "Original CRNN model",
-        "calibrated_key": "CRNN"
+        "description": "CRNN model",
+        "calibrated_key": "crnn_model"
       },
       "Attention-CRNN": {
         "filename": "attention_crnn_model.keras",
         "architecture": "Attention-CRNN",
-        "description": "Original Attention-CRNN model",
-        "calibrated_key": "Attention-CRNN"
+        "description": "Attention-CRNN model",
+        "calibrated_key": "attention_crnn_model"
       },
-      "new_CNN": {
-        "filename": "new_cnn_model.keras",
-        "architecture": "CNN",
-        "description": "NEW CNN (trained Jan 10-11, 2026)",
-        "calibrated_key": "new_CNN"
+      "conformer": {
+        "filename": "conformer_model.keras",
+        "architecture": "Conformer",
+        "description": "Conformer model with Lambda layers",
+        "calibrated_key": "conformer_model",
+        "safe_mode": false
       },
-      "new_RNN": {
-        "filename": "new_rnn_model.keras",
-        "architecture": "RNN",
-        "description": "NEW RNN (trained Jan 10-11, 2026)",
-        "calibrated_key": "new_RNN"
+      "tcn": {
+        "filename": "tcn_model.keras",
+        "architecture": "TCN",
+        "description": "Temporal Convolutional Network",
+        "calibrated_key": "tcn_model"
       },
-      "new_CRNN": {
-        "filename": "new_crnn_model.keras",
-        "architecture": "CRNN",
-        "description": "NEW CRNN (trained Jan 10-11, 2026)",
-        "calibrated_key": "new_CRNN"
+      "efficientnet": {
+        "filename": "efficientnet_model.keras",
+        "architecture": "EfficientNet",
+        "description": "EfficientNet model",
+        "calibrated_key": "efficientnet_model"
       },
-      "new_Attention-CRNN": {
-        "filename": "new_attention_crnn_model.keras",
-        "architecture": "Attention-CRNN",
-        "description": "NEW Attention-CRNN (trained Jan 10-11, 2026)",
-        "calibrated_key": "new_Attention-CRNN"
+      "mobilenet": {
+        "filename": "mobilenet_model.keras",
+        "architecture": "MobileNet",
+        "description": "MobileNet model",
+        "calibrated_key": "mobilenet_model"
       }
     }
   },
@@ -96,7 +98,8 @@
     "predictions_file": "./logs/predictions.json",
     "alert_sound": false,
     "console_output": true,
-    "timestamp_format": "%Y-%m-%d %H:%M:%S"
+    "timestamp_format": "%Y-%m-%d %H:%M:%S",
+    "show_prediction_statistics": true
   },
   
   "alerts": {

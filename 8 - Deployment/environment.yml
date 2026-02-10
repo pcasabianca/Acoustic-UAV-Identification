@@ -1,0 +1,13 @@
+name: drone
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - tensorflow=2.20.0
+  - librosa
+  - numpy
+  - pip
+  - pip:
+    - soundfile
+    - pyaudio

@@ -135,12 +135,13 @@ class AudioRecorder:
         """
         output_path = self.output_dir / filename
         
-        # Normalize audio to use full dynamic range
-        max_val = np.abs(audio).max()
-        if max_val > 0:
-            # Normalize to 80% of max to avoid clipping
-            audio = audio * (0.8 / max_val)
-            print(f"[NORM] Normalized audio (gain: {0.8/max_val:.1f}x)")
+        # Optionally normalize audio before saving (controlled by config.feature_extraction.normalization)
+        if self.config.get('feature_extraction', {}).get('normalization', False):
+            max_val = np.abs(audio).max()
+            if max_val > 0:
+                # Normalize to 80% of max to avoid clipping
+                audio = audio * (0.8 / max_val)
+                print(f"[NORM] Normalized audio (gain: {0.8/max_val:.1f}x)")
         
         # Convert back to int16
         audio_int = (audio * 32767).astype(np.int16)
