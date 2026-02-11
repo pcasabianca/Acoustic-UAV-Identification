@@ -7,7 +7,7 @@
   },
   "output": {
     "clean_before_build": true,
-    "total_samples": 30000,
+    "total_samples": 40000,
     "split_ratio": [
       0.8,
       0.1,
@@ -23,7 +23,23 @@
   },
   "mix": {
     "mode": "sum",
-    "normalize_peak_dbfs": -1.0
+    "normalize_peak_dbfs": -1.0,
+    "difficulty": {
+      "enabled": true,
+      "snr_min_db": -10.0,
+      "snr_max_db": 40.0,
+      "distance_max_m": 450.0,
+      "w_snr": 0.30,
+      "w_distance": 0.50,
+      "w_rms_var": 0.10,
+      "w_augmentation": 0.10,
+      "w_spectral": 0.45,
+      "w_temporal": 0.35,
+      "w_hard_neg": 0.20,
+      "rms_window_samples": 2048,
+      "temp_window_samples": 1024,
+      "n_fft": 2048
+    }
   },
   "targets": {
     "strict": false,

@@ -142,6 +142,50 @@ def _load_mfcc_json(path):
     return mfccs, labels, mapping
 
 
+def load_mel_features_with_metadata(split='train', prefer_npz=True):
+    """
+    Load MEL features along with metadata (including difficulty scores).
+    
+    Args:
+        split: 'train', 'val', or 'test'
+        prefer_npz: If True, try NPZ first
+    
+    Returns:
+        tuple: (mels, labels, metadata_list) where:
+            - mels: numpy array of shape (n_samples, n_mels, time_frames)
+            - labels: numpy array of shape (n_samples,)
+            - metadata_list: list of dicts containing sample metadata (difficulty, scenario, etc.)
+    """
+    # Load features normally
+    mels, labels, mapping = load_mel_features(split, prefer_npz)
+    
+    # Load metadata from dataset directory
+    dataset_dir = Path(config.PROJECT_ROOT) / '0 - DADS dataset extraction' / f'dataset_{split}'
+    metadata_path = dataset_dir / 'metadata.jsonl'
+    
+    metadata_list = []
+    if metadata_path.exists():
+        with open(metadata_path, 'r') as f:
+            for line in f:
+                metadata_list.append(json.loads(line))
+    else:
+        # Fallback: create dummy metadata if file doesn't exist
+        print(f"[WARN] Metadata file not found: {metadata_path}")
+        print(f"[WARN] Creating dummy metadata (difficulty=0.5)")
+        metadata_list = [{'difficulty': 0.5} for _ in range(len(mels))]
+    
+    # Verify lengths match
+    if len(metadata_list) != len(mels):
+        print(f"[WARN] Metadata count ({len(metadata_list)}) != features count ({len(mels)})")
+        # Pad or truncate metadata to match features
+        if len(metadata_list) < len(mels):
+            metadata_list.extend([{'difficulty': 0.5} for _ in range(len(mels) - len(metadata_list))])
+        else:
+            metadata_list = metadata_list[:len(mels)]
+    
+    return mels, labels, metadata_list
+
+
 def get_feature_stats(split='train', feature_type='mel'):
     """
     Get statistics about extracted features without loading full data.

@@ -32,12 +32,8 @@ DATASET_TEST_DIR = EXTRACTION_DIR / "dataset_test"
 
 # v4 dataset canonical location (versioned and stored inside extraction dir)
 # Use V4_ACTIVE_DATASET_ID env var to redirect pipeline consumers to a v4 dataset
+# NOTE: Do NOT create the directory at import time - let scripts create it when needed
 V4_DATASETS_DIR = EXTRACTION_DIR / "datasets_v4"
-try:
-    V4_DATASETS_DIR.mkdir(exist_ok=True)
-except Exception:
-    # best-effort; some environments may not allow mkdir here at import time
-    pass
 
 # Optional: allow choosing an active v4 dataset via env var. When set,
 # DATASET_TRAIN_DIR/VAL/TEST and DATASET_ROOT will point into that v4 dataset
@@ -213,12 +209,17 @@ NUM_SEGMENTS = 1
 import os as _os
 AUGMENTATION_MAX_WORKERS = int(_os.environ.get('AUGMENTATION_WORKERS', _os.cpu_count() or 4))
 
+# TensorFlow CPU threading configuration (optimized for 12-core CPU)
+# These can be overridden by environment variables TF_INTRA_OP_THREADS and TF_INTER_OP_THREADS
+TF_INTRA_OP_PARALLELISM_THREADS = int(_os.environ.get('TF_INTRA_OP_THREADS', 10))  # Heavy ops (matmul, conv): use most cores
+TF_INTER_OP_PARALLELISM_THREADS = int(_os.environ.get('TF_INTER_OP_THREADS', 2))   # Op coordination: keep low
+
 # Training parameters (centralized)
-MIN_EPOCHS = 10  # Minimum epochs before early stopping can trigger
+MIN_EPOCHS = 25  # Minimum epochs before early stopping can trigger
 MAX_EPOCHS = 250  # Maximum epochs limit
 # Reduce default batch size to introduce more gradient noise and improve
 # generalization on smaller datasets / limited augmentation.
-BATCH_SIZE = 32  # Default batch size for training
+BATCH_SIZE = 16  # Reduced from 32 to 16 to lower memory/CPU usage
 # Learning rate (default for all models)
 LEARNING_RATE = 0.0001  # Default learning rate
 
@@ -444,3 +445,53 @@ MEL_VAL_INDEX_PATH_STR = get_path_str(MEL_VAL_INDEX_PATH)
 # String versions of voted paths dictionaries
 VOTED_PATHS_STR = {k: get_path_str(v) for k, v in VOTED_PATHS.items()}
 SCORES_PATHS_STR = {k: get_path_str(v) for k, v in SCORES_PATHS.items()}
+
+# ===== CURRICULUM LEARNING CONFIGURATION =====
+CURRICULUM_LEARNING = {
+    # Enable curriculum learning (can be overridden by CLI --curriculum flag)
+    'enabled': False,
+    # Strategy: 'linear', 'step', 'exponential', 'none'
+    'strategy': 'linear',
+    # Number of warmup epochs (start with easy samples)
+    'warmup_epochs': 5,
+    # Initial fraction of samples to use (0.5 = 50% easiest samples)
+    'initial_fraction': 0.25,
+    # Growth rate per epoch (for linear strategy)
+    'growth_rate': 0.05,  # +5% samples per epoch
+    # Step size for 'step' strategy (increase every N epochs)
+    'step_size': 10,
+    # Tau for 'exponential' strategy (controls curvature)
+    'tau': 0.5,
+    # Minimum difficulty threshold (0.0-1.0, ignore too-easy samples)
+    'min_difficulty': 0.0,
+    # Maximum difficulty threshold (1.0 = all samples at the end)
+    'max_difficulty': 1.0,
+    # Sort order: 'ascending' (easy→hard) or 'descending'
+    'sort_order': 'ascending',
+    # Verbose logging for curriculum scheduler
+    'verbose': True
+}
+
+# Mapping trainer script names to model identifiers
+TRAINER_MODULES = {
+    'CNN_Trainer': 'cnn',
+    'RNN_Trainer': 'rnn',
+    'CRNN_Trainer': 'crnn',
+    'Attention_CRNN_Trainer': 'attention_crnn',
+    'EfficientNet_Trainer': 'efficientnet',
+    'MobileNet_Trainer': 'mobilenet',
+    'Conformer_Trainer': 'conformer',
+    'TCN_Trainer': 'tcn'
+}
+
+# Output format per trainer (for auto-detection)
+TRAINER_OUTPUT_FORMATS = {
+    'cnn': 'categorical',           # Dense(2, softmax)
+    'rnn': 'categorical',           # Dense(2, softmax)
+    'crnn': 'categorical',          # Dense(2, softmax)
+    'attention_crnn': 'categorical', # Dense(2, softmax)
+    'efficientnet': 'binary',       # Dense(1, sigmoid)
+    'mobilenet': 'binary',          # Dense(1, sigmoid)
+    'conformer': 'binary',          # Dense(1, sigmoid)
+    'tcn': 'binary'                 # Dense(1, sigmoid)
+}

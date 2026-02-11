@@ -11,9 +11,13 @@ from termcolor import colored
 import sys
 from pathlib import Path
 
-# Optimize CPU threads for 12-core CPU (use all cores)
-tf.config.threading.set_intra_op_parallelism_threads(12)
-tf.config.threading.set_inter_op_parallelism_threads(4)
+# Add project root to path to import config
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import config
+
+# Optimize CPU threads (configurable via config.py)
+tf.config.threading.set_intra_op_parallelism_threads(config.TF_INTRA_OP_PARALLELISM_THREADS)
+tf.config.threading.set_inter_op_parallelism_threads(config.TF_INTER_OP_PARALLELISM_THREADS)
 
 # Enable GPU memory growth if available
 gpus = tf.config.list_physical_devices('GPU')
@@ -23,10 +27,6 @@ if gpus:
             tf.config.experimental.set_memory_growth(gpu, True)
     except RuntimeError as e:
         print(f"GPU memory growth config failed: {e}")
-
-# Add project root to path to import config
-sys.path.insert(0, str(Path(__file__).parent.parent))
-import config
 
 # Import universal feature loader (supports NPZ and JSON)
 sys.path.insert(0, str(Path(__file__).parent.parent / 'tools'))
@@ -99,8 +99,18 @@ def build_model(input_shape):
     # This model must run on CPU - the pipeline automatically handles this
     model = keras.Sequential()
 
+    # Reshape from 4D (batch, height, width, channels) to 3D (batch, timesteps, features)
+    # LSTM expects 3D: (batch, timesteps, features)
+    model.add(keras.layers.Input(shape=input_shape))
+    # Flatten spatial dimensions: (h, w, c) → (h, w*c)
+    # Use height as timesteps, width*channels as features
+    if len(input_shape) == 3:
+        height, width, channels = input_shape
+        model.add(keras.layers.Reshape((height, width * channels)))
+    # If already 2D, keep as is
+    
     # 3 Bidirectional LSTM layers
-    model.add(keras.layers.Bidirectional(keras.layers.LSTM(100, return_sequences=True), input_shape=input_shape))
+    model.add(keras.layers.Bidirectional(keras.layers.LSTM(100, return_sequences=True)))
     model.add(keras.layers.Bidirectional(keras.layers.LSTM(100, return_sequences=True)))
     model.add(keras.layers.Bidirectional(keras.layers.LSTM(100)))
 
@@ -115,6 +125,13 @@ def build_model(input_shape):
 if __name__ == "__main__":
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Train RNN model with configurable loss function')
+    parser.add_argument('--curriculum', action='store_true',
+                       help='Enable curriculum learning (delegates to Universal_Curriculum_Trainer)')
+    parser.add_argument('--curriculum_strategy', type=str, default='linear',
+                       choices=['linear', 'step', 'exponential'],
+                       help='Curriculum learning strategy (only with --curriculum)')
+    parser.add_argument('--warmup_epochs', type=int, default=5,
+                       help='Warmup epochs for curriculum learning (only with --curriculum)')
     parser.add_argument('--loss', type=str, default='focal', choices=['bce', 'weighted_bce', 'focal'],
                        help='Loss function: bce, weighted_bce, or focal (default: focal)')
     parser.add_argument('--class_weight', type=float, default=3.0,
@@ -148,6 +165,48 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
+
+    # Intercept curriculum mode and delegate to Universal_Curriculum_Trainer
+    if args.curriculum:
+        print(colored("\n[CURRICULUM MODE] Delegating to Universal_Curriculum_Trainer", "cyan"))
+        import subprocess
+        
+        # Build command for Universal_Curriculum_Trainer
+        cmd = [
+            sys.executable,
+            str(Path(__file__).parent / 'Universal_Curriculum_Trainer.py'),
+            '--model', 'rnn'
+        ]
+        
+        # Forward relevant arguments
+        if args.loss:
+            cmd.extend(['--loss', args.loss])
+        if hasattr(args, 'focal_alpha') and args.focal_alpha:
+            cmd.extend(['--focal_alpha', str(args.focal_alpha)])
+        if hasattr(args, 'focal_gamma') and args.focal_gamma:
+            cmd.extend(['--focal_gamma', str(args.focal_gamma)])
+        if hasattr(args, 'batch_size') and args.batch_size:
+            cmd.extend(['--batch_size', str(args.batch_size)])
+        if hasattr(args, 'min_epochs') and args.min_epochs:
+            cmd.extend(['--min_epochs', str(args.min_epochs)])
+        if hasattr(args, 'max_epochs') and args.max_epochs:
+            cmd.extend(['--max_epochs', str(args.max_epochs)])
+        if args.curriculum_strategy:
+            cmd.extend(['--curriculum_strategy', args.curriculum_strategy])
+        if args.warmup_epochs:
+            cmd.extend(['--warmup_epochs', str(args.warmup_epochs)])
+        if hasattr(args, 'use_class_weight') and args.use_class_weight:
+            cmd.append('--use_class_weight')
+        if hasattr(args, 'verbose') and args.verbose is not None:
+            cmd.extend(['--verbose', str(args.verbose)])
+        # Conformer-specific
+        if hasattr(args, 'blocks') and args.blocks:
+            cmd.extend(['--blocks', str(args.blocks)])
+        
+        # Execute and exit
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
+
     print(colored(f"\n[CONFIG] Loss function: {args.loss}", "cyan"))
     # Apply config defaults when CLI args are not specified
     try:

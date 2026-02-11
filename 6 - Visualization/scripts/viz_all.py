@@ -23,7 +23,8 @@ def _ensure_run_dirs(base_out: Path):
         'perf_vs_snr': base_out / 'perf_vs_snr',
         'training': base_out / 'training',
         'summary': base_out / 'summary',
-        'manifests': base_out / 'manifests'
+        'manifests': base_out / 'manifests',
+        'difficulty_dataset': base_out / 'difficulty_dataset'
     }
     for d in dirs.values():
         d.mkdir(parents=True, exist_ok=True)
@@ -96,7 +97,7 @@ def run(models: List[str] = None, splits=('val','test'), perf_dir=None, results_
             gm = perf.get('global_metrics', {})
             w.writerow([md.get('model'), md.get('split'), md.get('threshold'), gm.get('tp'), gm.get('tn'), gm.get('fp'), gm.get('fn')])
 
-    artifacts = {'perf_vs_snr': [], 'training': [], 'summary': [str(csv_path)], 'heatmaps': [], 'thresholds': [], 'pr_roc': [], 'benchmark': []}
+    artifacts = {'perf_vs_snr': [], 'training': [], 'summary': [str(csv_path)], 'heatmaps': [], 'thresholds': [], 'pr_roc': [], 'benchmark': [], 'difficulty_dataset': []}
 
     # prepare VizContext
     ctx = VizContext(
@@ -134,6 +135,8 @@ def run(models: List[str] = None, splits=('val','test'), perf_dir=None, results_
                         artifacts['training'].append(sp)
                     elif '/benchmark/' in sp or 'confusions' in sp:
                         artifacts['benchmark'].append(sp)
+                    elif '/difficulty_dataset/' in sp or 'difficulty' in sp:
+                        artifacts['difficulty_dataset'].append(sp)
                     else:
                         # fallback: add to summary
                         artifacts['summary'].append(sp)

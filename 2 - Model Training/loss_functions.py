@@ -122,16 +122,32 @@ def focal_loss(alpha=0.75, gamma=2.0):
         epsilon = keras.backend.epsilon()
         y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
         
-        # Convert sparse labels to one-hot if needed
-        if len(y_true.shape) == 1 or y_true.shape[-1] == 1:
-            y_true = tf.one_hot(tf.cast(y_true, tf.int32), depth=y_pred.shape[-1])
-            y_true = tf.cast(y_true, tf.float32)
+        # Detect if binary (sigmoid output) or categorical (softmax output)
+        is_binary = (y_pred.shape[-1] == 1 or len(y_pred.shape) == 1)
         
-        # Calculate categorical cross entropy
-        bce = keras.losses.categorical_crossentropy(y_true, y_pred)
-        
-        # Calculate p_t (probability of true class)
-        p_t = tf.reduce_sum(y_true * y_pred, axis=-1)
+        if is_binary:
+            # Binary classification: y_pred shape (batch, 1) or (batch,)
+            # Flatten to 1D for consistency
+            y_true_flat = tf.reshape(y_true, [-1])
+            y_pred_flat = tf.reshape(y_pred, [-1])
+            
+            # Binary cross entropy
+            bce = keras.losses.binary_crossentropy(y_true_flat, y_pred_flat)
+            
+            # Calculate p_t (probability of true class)
+            # For binary: p_t = y_pred if y_true=1, else (1-y_pred)
+            p_t = y_true_flat * y_pred_flat + (1.0 - y_true_flat) * (1.0 - y_pred_flat)
+        else:
+            # Multi-class categorical: convert sparse labels to one-hot if needed
+            if len(y_true.shape) == 1 or y_true.shape[-1] == 1:
+                y_true = tf.one_hot(tf.cast(y_true, tf.int32), depth=y_pred.shape[-1])
+                y_true = tf.cast(y_true, tf.float32)
+            
+            # Calculate categorical cross entropy
+            bce = keras.losses.categorical_crossentropy(y_true, y_pred)
+            
+            # Calculate p_t (probability of true class)
+            p_t = tf.reduce_sum(y_true * y_pred, axis=-1)
         
         # If a dynamic positive-class weight has been set at runtime, prefer
         # using it to compute an effective alpha. The mapping used here is:
@@ -149,10 +165,14 @@ def focal_loss(alpha=0.75, gamma=2.0):
         else:
             effective_alpha = alpha
 
-        # Build per-sample alpha_t from one-hot y_true using effective alpha
-        alpha_tensor = y_true * effective_alpha + (1.0 - y_true) * (1.0 - effective_alpha)
-        # Reduce to scalar per-sample
-        alpha_factor = tf.reduce_sum(alpha_tensor, axis=-1)
+        # Build alpha_factor based on binary or categorical
+        if is_binary:
+            # For binary: alpha_factor = alpha if y_true=1, else (1-alpha)
+            alpha_factor = y_true_flat * effective_alpha + (1.0 - y_true_flat) * (1.0 - effective_alpha)
+        else:
+            # For categorical: use one-hot weighted alpha
+            alpha_tensor = y_true * effective_alpha + (1.0 - y_true) * (1.0 - effective_alpha)
+            alpha_factor = tf.reduce_sum(alpha_tensor, axis=-1)
 
         # Modulating factor
         modulating_factor = tf.pow(1.0 - p_t, gamma)
@@ -169,9 +189,14 @@ def focal_loss(alpha=0.75, gamma=2.0):
         except Exception:
             dyn_neg = 1.0
 
-        # y_true is one-hot at this point
-        y_true_pos = y_true[:, 1]
-        weights = y_true_pos * dyn_pos + (1.0 - y_true_pos) * dyn_neg
+        # Apply dynamic weights based on format
+        if is_binary:
+            # For binary: y_true_flat is already 0/1
+            weights = y_true_flat * dyn_pos + (1.0 - y_true_flat) * dyn_neg
+        else:
+            # For categorical: y_true is one-hot
+            y_true_pos = y_true[:, 1]
+            weights = y_true_pos * dyn_pos + (1.0 - y_true_pos) * dyn_neg
 
         weighted_focal = weights * focal
 

@@ -12,9 +12,13 @@ from termcolor import colored
 import sys
 from pathlib import Path
 
-# Optimize CPU threads for 12-core CPU
-tf.config.threading.set_intra_op_parallelism_threads(12)
-tf.config.threading.set_inter_op_parallelism_threads(4)
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import config
+
+# Optimize CPU threads (use config values)
+tf.config.threading.set_intra_op_parallelism_threads(config.TF_INTRA_OP_PARALLELISM_THREADS)
+tf.config.threading.set_inter_op_parallelism_threads(config.TF_INTER_OP_PARALLELISM_THREADS)
 
 # Enable GPU memory growth if available
 gpus = tf.config.list_physical_devices('GPU')
@@ -24,10 +28,6 @@ if gpus:
             tf.config.experimental.set_memory_growth(gpu, True)
     except RuntimeError as e:
         print(f"GPU memory growth config failed: {e}")
-
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-import config
 
 # Import universal feature loader
 sys.path.insert(0, str(Path(__file__).parent.parent / 'tools'))
@@ -183,10 +183,20 @@ def prepare_datasets():
 if __name__ == "__main__":
     # Parse command-line arguments
     parser = argparse.ArgumentParser()
+    parser.add_argument('--curriculum', action='store_true',
+                       help='Enable curriculum learning (delegates to Universal_Curriculum_Trainer)')
+    parser.add_argument('--curriculum_strategy', type=str, default='linear',
+                       choices=['linear', 'step', 'exponential'],
+                       help='Curriculum learning strategy (only with --curriculum)')
+    parser.add_argument('--warmup_epochs', type=int, default=5,
+                       help='Warmup epochs for curriculum learning (only with --curriculum)')
     parser.add_argument('--loss', type=str, default='bce',
                         choices=['bce', 'weighted_bce', 'focal', 'recall_focused'],
                         help='Loss function to use')
     parser.add_argument('--epochs', type=int, default=config.MAX_EPOCHS, help='Number of epochs')
+    # Aliases for compatibility with run_full_pipeline.sh and Universal_Curriculum_Trainer
+    parser.add_argument('--max_epochs', type=int, default=None, help='Total epochs (alias for --epochs)')
+    parser.add_argument('--min_epochs', type=int, default=None, help='Minimum epochs before early stopping (used in curriculum delegation)')
     parser.add_argument('--use_dynamic_weight', action='store_true', default=None,
                        help='Enable dynamic positive-class weight scheduler (updates each epoch)')
     parser.add_argument('--dyn_base', type=float, default=1.0,
@@ -200,6 +210,39 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=BATCH_SIZE,
                         help='Training batch size')
     args = parser.parse_args()
+    # Backwards/cli compatibility: map max_epochs -> epochs when provided
+    if getattr(args, 'max_epochs', None) is not None:
+        args.epochs = args.max_epochs
+    # Ensure min_epochs attribute exists for callbacks
+    if not hasattr(args, 'min_epochs'):
+        args.min_epochs = None
+    
+    # Intercept curriculum mode and delegate to Universal_Curriculum_Trainer
+    if args.curriculum:
+        print(colored("\n[CURRICULUM MODE] Delegating to Universal_Curriculum_Trainer", "cyan"))
+        import subprocess
+        
+        cmd = [
+            sys.executable,
+            str(Path(__file__).parent / 'Universal_Curriculum_Trainer.py'),
+            '--model', 'efficientnet'
+        ]
+        
+        if args.loss:
+            cmd.extend(['--loss', args.loss])
+        if args.batch_size:
+            cmd.extend(['--batch_size', str(args.batch_size)])
+        if args.epochs:
+            cmd.extend(['--max_epochs', str(args.epochs)])
+        if getattr(args, 'min_epochs', None) is not None:
+            cmd.extend(['--min_epochs', str(args.min_epochs)])
+        if args.curriculum_strategy:
+            cmd.extend(['--curriculum_strategy', args.curriculum_strategy])
+        if args.warmup_epochs:
+            cmd.extend(['--warmup_epochs', str(args.warmup_epochs)])
+        
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
 
     # Prepare datasets
     X_train, X_validation, X_test, y_train, y_validation, y_test = prepare_datasets()

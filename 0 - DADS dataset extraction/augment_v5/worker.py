@@ -6,6 +6,7 @@ import numpy as np
 from .audio_utils_v5 import load_audio
 from .modifiers.chain import apply_chain
 from .io_atomic import atomic_write_wav
+from .difficulty import compute_difficulty_score
 
 # ensure ops are registered
 from . import modifiers  # side-effect: imports ops modules and populates registry
@@ -80,6 +81,22 @@ def process_shard(tasks, dataset_dir, shard_path, audio_cfg, mix_cfg):
                 "sources": t["components"],
                 "audio": {"sample_rate": sr, "duration_s": dur_s, **audio_meta},
             }
+            
+            # Compute difficulty score before finalizing metadata
+            difficulty_cfg = mix_cfg.get('difficulty', {})
+            if difficulty_cfg.get('enabled', True):
+                # Build metadata dict for difficulty computation
+                diff_meta = {
+                    'snr_est_db': snr_est_db,
+                    'sources': t["components"],
+                }
+                # Extract distance if available in scenario
+                if 'distance_m' in t:
+                    diff_meta['distance_m'] = t['distance_m']
+                
+                difficulty_score = compute_difficulty_score(mix, diff_meta, t["label"], difficulty_cfg)
+                meta['difficulty'] = float(difficulty_score)
+            
             # attach SNR metadata when available
             if snr_est_db is not None:
                 # preserve legacy top-level fields

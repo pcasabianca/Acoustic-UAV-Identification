@@ -196,7 +196,7 @@ if [ "$USE_NOHUP" = true ] && [ -z "${NOHUP_LAUNCHED:-}" ]; then
     # Use the preserved original args so flags like --skip-* are forwarded
     # Use absolute path to this script to ensure nohup can execute it from any cwd
     SCRIPT_ABS="$PROJECT_DIR/$(basename "$0")"
-    env NOHUP_LAUNCHED=1 nohup "$SCRIPT_ABS" "${ORIGINAL_ARGS[@]}" --no-nohup > "$LOG_FILE" 2>&1 &
+    env NOHUP_LAUNCHED=1 PYTHONUNBUFFERED=1 nohup "$SCRIPT_ABS" "${ORIGINAL_ARGS[@]}" --no-nohup > "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
     echo "Started background process PID=$(cat $PID_FILE)"
     exit 0
@@ -319,11 +319,13 @@ run_python() {
             --security-opt label=disable \
             -v "$PROJECT_DIR:/workspace:rw" \
             -w "/workspace" \
+            -e PYTHONUNBUFFERED=1 \
             -e HSA_OVERRIDE_GFX_VERSION="$GFX_VERSION" \
             "$ROCM_IMAGE" \
-            python3 "/workspace/$script" $args
+            python3 -u "/workspace/$script" $args
     else
-        "$VENV_PATH" "$script" $args
+        # Run Python in unbuffered mode so stdout/stderr are flushed immediately
+        "$VENV_PATH" -u "$script" $args
     fi
 }
 
