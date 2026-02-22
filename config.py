@@ -215,11 +215,11 @@ TF_INTRA_OP_PARALLELISM_THREADS = int(_os.environ.get('TF_INTRA_OP_THREADS', 10)
 TF_INTER_OP_PARALLELISM_THREADS = int(_os.environ.get('TF_INTER_OP_THREADS', 2))   # Op coordination: keep low
 
 # Training parameters (centralized)
-MIN_EPOCHS = 25  # Minimum epochs before early stopping can trigger
-MAX_EPOCHS = 250  # Maximum epochs limit
+MIN_EPOCHS = 1  # Minimum epochs before early stopping can trigger
+MAX_EPOCHS = 2 # Maximum epochs limit
 # Reduce default batch size to introduce more gradient noise and improve
 # generalization on smaller datasets / limited augmentation.
-BATCH_SIZE = 16  # Reduced from 32 to 16 to lower memory/CPU usage
+BATCH_SIZE = 32  # Reduced from 32 to 16 to lower memory/CPU usage
 # Learning rate (default for all models)
 LEARNING_RATE = 0.0001  # Default learning rate
 

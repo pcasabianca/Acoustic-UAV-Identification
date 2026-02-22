@@ -317,8 +317,9 @@ def _compute_periodic_modulation(audio, cfg):
     High periodicity = resembles drone = hard.
     """
     # Compute envelope
-    win_size = 512
-    hop = 256
+    win_size = cfg.get('mod_window_samples', 512)
+    hop = cfg.get('mod_hop_samples', 256)
+    sr = cfg.get('sr', 22050)
     
     if len(audio) < win_size * 2:
         return 0.0
@@ -344,7 +345,7 @@ def _compute_periodic_modulation(audio, cfg):
     
     # Find maximum autocorrelation in relevant lag range
     # Drone modulation typically 1-10 Hz
-    sr_envelope = 22050 / hop  # Envelope sample rate
+    sr_envelope = sr / hop  # Envelope sample rate
     min_period = int(sr_envelope * 0.1)  # 10 Hz max
     max_period = int(sr_envelope * 1.0)  # 1 Hz min
     

@@ -167,8 +167,7 @@ class ConfusionMatrixLogger(keras.callbacks.Callback):
         self.verbose = verbose
     
     def on_epoch_end(self, epoch, logs=None):
-        if not self.verbose:
-            return
+        logs = logs or {}
         
         # Prédictions
         y_pred_proba = self.model.predict(self.X_val, verbose=0)
@@ -199,12 +198,28 @@ class ConfusionMatrixLogger(keras.callbacks.Callback):
             recall = tp / (tp + fn) if (tp + fn) > 0 else 0
             specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
             f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+            npv = tn / (tn + fn) if (tn + fn) > 0 else 0  # Negative Predictive Value
+            balanced_accuracy = (recall + specificity) / 2
+            
+            # Sauvegarder dans l'historique
+            logs['val_tp'] = float(tp)
+            logs['val_tn'] = float(tn)
+            logs['val_fp'] = float(fp)
+            logs['val_fn'] = float(fn)
+            logs['val_precision'] = float(precision)
+            logs['val_recall'] = float(recall)
+            logs['val_f1'] = float(f1)
+            logs['val_specificity'] = float(specificity)
+            logs['val_npv'] = float(npv)
+            logs['val_balanced_accuracy'] = float(balanced_accuracy)
             
             # Affichage
-            print(colored(f"[Confusion] TP={tp:4d} TN={tn:4d} FP={fp:4d} FN={fn:4d} | "
-                         f"Precision={precision:.3f} Recall={recall:.3f} F1={f1:.3f}", "cyan"))
+            if self.verbose:
+                print(colored(f"[Confusion] TP={tp:4d} TN={tn:4d} FP={fp:4d} FN={fn:4d} | "
+                             f"Precision={precision:.3f} Recall={recall:.3f} F1={f1:.3f}", "cyan"))
         else:
             # Multi-classe: afficher juste les vrais/faux
             correct = np.trace(cm)
             total = np.sum(cm)
-            print(colored(f"[Confusion] Correct={correct}/{total} ({100*correct/total:.1f}%)", "cyan"))
+            if self.verbose:
+                print(colored(f"[Confusion] Correct={correct}/{total} ({100*correct/total:.1f}%)", "cyan"))

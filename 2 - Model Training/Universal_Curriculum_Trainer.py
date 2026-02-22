@@ -491,8 +491,8 @@ def main():
     # Train model with curriculum learning (epoch by epoch)
     print(colored("\n[TRAINING] Starting curriculum learning...\n", "green"))
     
-    all_history = {'loss': [], 'accuracy': [], 
-                   'val_loss': [], 'val_accuracy': []}
+    # Initialize empty history - will dynamically capture all metrics from callbacks
+    all_history = {}
     
     if curriculum_scheduler is not None:
         # Curriculum: train epoch by epoch with increasing difficulty
@@ -535,10 +535,11 @@ def main():
             )
             epoch_duration = datetime.now() - epoch_start
             
-            # Accumulate history
-            for key in all_history.keys():
-                if key in history.history:
-                    all_history[key].extend(history.history[key])
+            # Accumulate ALL metrics dynamically (captures callbacks metrics like TP/TN/FP/FN)
+            for key, values in history.history.items():
+                if key not in all_history:
+                    all_history[key] = []
+                all_history[key].extend(values)
             
             # Afficher métriques sur une ligne
             loss = history.history.get('loss', [0])[0]

@@ -118,77 +118,70 @@ def plot_learning_curves(df, model_name: str, out_dir: Optional[str] = None):
     else:
         ax.text(0.5, 0.5, 'No accuracy columns found', ha='center', va='center')
 
-    # Precision/Recall/F1
+    # Confusion Matrix Evolution
     ax = axes[1, 0]
-    prs = []
-    for metric in ('precision', 'recall', 'f1'):
-        tcol = _find_col(df, metric)
-        if tcol:
-            prs.append((metric, tcol))
-    if prs:
-        for metric, col in prs:
+    cm_cols = {}
+    for metric in ('val_tp', 'val_tn', 'val_fp', 'val_fn'):
+        col = _find_col(df, metric)
+        if col:
+            cm_cols[metric] = col
+    
+    if len(cm_cols) == 4:
+        # Plot all 4 confusion matrix components
+        colors = {'val_tp': 'C2', 'val_tn': 'C0', 'val_fp': 'C3', 'val_fn': 'C1'}
+        labels = {'val_tp': 'True Pos', 'val_tn': 'True Neg', 'val_fp': 'False Pos', 'val_fn': 'False Neg'}
+        
+        for metric, col in cm_cols.items():
             raw = df[col].astype(float).values
-            # choose color mapping: precision->C0, recall->C1, f1->C2
-            color = 'C0' if 'prec' in metric else ('C1' if 'rec' in metric else 'C2')
-            ax.plot(epochs, raw, color=color, alpha=0.5, linewidth=0.8)
+            ax.plot(epochs, raw, color=colors[metric], alpha=0.5, linewidth=0.8)
             series = _smooth_series(raw)
-            ax.plot(epochs, series, label=metric, linewidth=1.25)
-        # compute f1 if missing but precision+recall present
-        names = [m for m, _ in prs]
-        if 'f1' not in names and 'precision' in names and 'recall' in names:
-            try:
-                pcol = _find_col(df, 'precision')
-                rcol = _find_col(df, 'recall')
-                prec = df[pcol].astype(float).values
-                rec = df[rcol].astype(float).values
-                f1 = (2 * prec * rec) / (prec + rec + 1e-12)
-                ax.plot(epochs, _smooth_series(f1), label='f1', linewidth=1.25)
-            except Exception:
-                pass
-        ax.set_ylim(0.0, 1.0)
-        ax.set_title('Precision/Recall/F1', fontsize=fontsize_title)
+            ax.plot(epochs, series, label=labels[metric], color=colors[metric], linewidth=1.25)
+        
+        ax.set_title('Confusion Matrix Evolution', fontsize=fontsize_title)
+        ax.set_ylabel('Count', fontsize=10)
         ax.grid(True, alpha=0.25)
         ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), fontsize='small')
     else:
-        ax.set_title('Precision/Recall/F1', fontsize=fontsize_title)
-        ax.text(0.5, 0.5, 'Precision/Recall not recorded in history', ha='center', va='center')
+        ax.set_title('Confusion Matrix Evolution', fontsize=fontsize_title)
+        ax.text(0.5, 0.5, 'TP/TN/FP/FN not recorded in history', ha='center', va='center')
 
-    # LR or overfit gap
+    # Derived Metrics (Specificity, NPV, Balanced Accuracy)
     ax = axes[1, 1]
-    lr_col = None
-    for candidate in ('lr', 'learning_rate'):
-        if _find_col(df, candidate):
-            lr_col = _find_col(df, candidate)
-            break
-    if lr_col:
-        series = df[lr_col].astype(float).values
-        # plot raw LR (no smoothing) in background faintly as well
-        ax.plot(epochs, series, color='C3', alpha=0.5, linewidth=0.8)
-        ax.plot(epochs, series, label='lr', linewidth=1.25)
-        ax.set_yscale('log')
-        ax.set_title('Learning rate', fontsize=fontsize_title)
+    derived_cols = {}
+    for metric in ('val_specificity', 'val_npv', 'val_balanced_accuracy'):
+        col = _find_col(df, metric)
+        if col:
+            derived_cols[metric] = col
+    
+    if derived_cols:
+        colors = {'val_specificity': 'C5', 'val_npv': 'C6', 'val_balanced_accuracy': 'C4'}
+        labels = {'val_specificity': 'Specificity', 'val_npv': 'NPV', 'val_balanced_accuracy': 'Balanced Acc'}
+        
+        for metric, col in derived_cols.items():
+            raw = df[col].astype(float).values
+            ax.plot(epochs, raw, color=colors.get(metric, 'C0'), alpha=0.5, linewidth=0.8)
+            series = _smooth_series(raw)
+            ax.plot(epochs, series, label=labels.get(metric, metric), 
+                   color=colors.get(metric, 'C0'), linewidth=1.25)
+        
+        # Also add Precision/Recall/F1 if available for comparison
+        for metric in ('val_precision', 'val_recall', 'val_f1'):
+            col = _find_col(df, metric)
+            if col:
+                raw = df[col].astype(float).values
+                color = 'C0' if 'prec' in metric else ('C1' if 'rec' in metric else 'C2')
+                series = _smooth_series(raw)
+                label = metric.replace('val_', '').replace('_', ' ').title()
+                ax.plot(epochs, series, label=label, color=color, 
+                       linewidth=1.0, linestyle='--', alpha=0.7)
+        
+        ax.set_ylim(0.0, 1.0)
+        ax.set_title('Derived Metrics', fontsize=fontsize_title)
         ax.grid(True, alpha=0.25)
         ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), fontsize='small')
     else:
-        # overfit gap (val_loss - loss)
-        if _find_col(df, 'loss') and _find_col(df, 'val_loss'):
-            raw_gap = df[_find_col(df, 'val_loss')].astype(float).values - df[_find_col(df, 'loss')].astype(float).values
-            # plot raw gap in background
-            ax.plot(epochs, raw_gap, color='C4', alpha=0.5, linewidth=0.8)
-            sg = _smooth_series(raw_gap)
-            ax.plot(epochs, sg, label='val_loss - train_loss', linewidth=1.25)
-            ax.axhline(0.0, color='k', linewidth=0.8, alpha=0.6)
-            # annotate epoch of max gap
-            try:
-                idx = int(np.nanargmax(sg))
-                ax.annotate(f'max gap {sg[idx]:.4f}', xy=(epochs[idx], sg[idx]), xytext=(10, 10), textcoords='offset points', fontsize=9, arrowprops=dict(arrowstyle='->', lw=0.8))
-            except Exception:
-                pass
-            ax.set_title('Overfit gap (val - train)', fontsize=fontsize_title)
-            ax.grid(True, alpha=0.25)
-            ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), fontsize='small')
-        else:
-            ax.text(0.5, 0.5, 'No learning rate or loss columns found', ha='center', va='center')
+        ax.set_title('Derived Metrics', fontsize=fontsize_title)
+        ax.text(0.5, 0.5, 'Derived metrics not recorded in history', ha='center', va='center')
 
     # ticks and layout
     for axr in axes.ravel():
@@ -221,9 +214,14 @@ def plot_learning_curves(df, model_name: str, out_dir: Optional[str] = None):
         best_metric = ('val_loss', float(df[col].astype(float).values[idx]), int(df['epoch'].values[idx]) if 'epoch' in df.columns else idx + 1)
     if best_metric:
         summary['best_metric'] = {'name': best_metric[0], 'value': best_metric[1], 'epoch': best_metric[2]}
-    # final values
+    
+    # final values - include all important metrics
     final = {}
-    for k in ('loss', 'val_loss', 'accuracy', 'val_accuracy', 'precision', 'recall', 'f1'):
+    metric_names = ['loss', 'val_loss', 'accuracy', 'val_accuracy', 
+                   'val_precision', 'val_recall', 'val_f1',
+                   'val_specificity', 'val_npv', 'val_balanced_accuracy',
+                   'val_tp', 'val_tn', 'val_fp', 'val_fn']
+    for k in metric_names:
         col = _find_col(df, k)
         if col:
             try:
@@ -231,7 +229,7 @@ def plot_learning_curves(df, model_name: str, out_dir: Optional[str] = None):
             except Exception:
                 final[k] = None
     summary['final'] = final
-
+    
     summary_path = out / f'training__{model_name}.json'
     try:
         with open(summary_path, 'w') as fh:

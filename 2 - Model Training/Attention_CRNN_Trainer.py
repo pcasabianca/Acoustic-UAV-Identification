@@ -531,41 +531,26 @@ def main():
     val_metrics_cb = ValMetricsCallback((X_val, y_val))
     callbacks_list = [val_metrics_cb] + callbacks_list
 
-    # Respect max_epochs argument
-    fit_kwargs['epochs'] = args.max_epochs
-    history = model.fit(**fit_kwargs)
-    
-    # Save history
-    hist_df = pd.DataFrame(history.history)
-    os.makedirs(os.path.dirname(HISTORY_SAVE), exist_ok=True)
-    hist_df.to_csv(HISTORY_SAVE)
-    
-    print(colored("\n" + "="*70, "green"))
-    print(colored("  ✓ TRAINING COMPLETED", "green"))
-    print(colored("="*70, "green"))
-    print(colored(f"Model saved: {MODEL_SAVE}", "cyan"))
-    print(colored(f"History saved: {HISTORY_SAVE}", "cyan"))
-    print(colored(f"Total epochs: {len(history.history['loss'])}", "yellow"))
-    print(colored(f"Best val_accuracy: {max(history.history['val_accuracy']):.4f}", "yellow"))
-
-    # Save training metadata if configured
-    try:
-        if getattr(config, 'SAVE_TRAINING_METADATA', False):
-            meta = {
-                'loss': args.loss,
-                'focal_alpha': float(args.focal_alpha),
-                'focal_gamma': float(args.focal_gamma),
-                'class_weight': float(args.class_weight) if args.class_weight is not None else None,
-                'use_dynamic_weight': bool(getattr(args, 'use_dynamic_weight', False)),
-                'model_path': str(MODEL_SAVE),
-            }
-            meta_path = config.RESULTS_DIR / 'attention_crnn_training_metadata.json'
-            with open(meta_path, 'w') as _m:
-                json.dump(meta, _m, indent=2)
-            print(colored(f"[INFO] Training metadata saved: {meta_path}", "cyan"))
-    except Exception:
-        pass
+    # Training execution is delegated to Universal_Curriculum_Trainer when
+    # this module is run as a script. See the `if __name__ == "__main__"` block below.
 
 
 if __name__ == "__main__":
-    main()
+    # Delegate all training to the Universal_Curriculum_Trainer to centralize
+    # curriculum and training logic while keeping this module responsible
+    # only for model construction via `build_attention_crnn`.
+    import sys
+    import subprocess
+    from pathlib import Path
+
+    cmd = [
+        sys.executable,
+        str(Path(__file__).parent / 'Universal_Curriculum_Trainer.py'),
+        '--model', 'attention_crnn'
+    ]
+    # Forward any CLI args the user provided to the universal trainer
+    if len(sys.argv) > 1:
+        cmd.extend(sys.argv[1:])
+
+    result = subprocess.run(cmd)
+    sys.exit(result.returncode)

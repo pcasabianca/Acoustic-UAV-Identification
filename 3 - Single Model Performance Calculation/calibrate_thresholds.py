@@ -108,8 +108,8 @@ def optimize_threshold_balanced(
     y_pred_proba: np.ndarray,
     *,
     # Drone-first balance
-    balance_target_delta: float = 0.03,
-    max_balance_gap: float = 0.10,
+    balance_target_delta: float = 0.01,
+    max_balance_gap: float = 0.03,
 
     # Floors (relaxable before balance)
     min_recall: float = 0.90,
