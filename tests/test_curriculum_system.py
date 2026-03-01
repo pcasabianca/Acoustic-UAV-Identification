@@ -40,6 +40,8 @@ trainers_to_test = [
     ('cnn', 'categorical'),
     ('efficientnet', 'binary'),
     ('mobilenet', 'binary'),
+    ('ast', 'binary'),
+    ('multires', 'binary'),
 ]
 
 for model_type, output_format in trainers_to_test:

@@ -125,7 +125,20 @@ def optimize_threshold_balanced(
     Returns (threshold, optimal_metrics, all_results, relaxation_info).
     """
 
-    thresholds = np.arange(threshold_range[0], threshold_range[1] + 1e-9, threshold_step)
+    # Smart candidate selection: prefer testing unique predicted probabilities
+    # (exact candidate thresholds) when feasible; otherwise fall back to a
+    # quantile-based grid to limit evaluations. This avoids wasting cycles on
+    # a naïve fixed-step grid when the classifier probabilities carry more
+    # informative thresholds.
+    uniques = np.unique(y_pred_proba)
+    # keep only probabilities within the requested range
+    uniques = uniques[(uniques >= threshold_range[0]) & (uniques <= threshold_range[1])]
+    if 0 < uniques.size <= 2000:
+        thresholds = np.sort(uniques)
+    else:
+        # too many unique values (or none), use a quantile grid bounded by range
+        grid_points = int(min(1000, max(50, int((threshold_range[1] - threshold_range[0]) / max(1e-6, threshold_step)))))
+        thresholds = np.linspace(threshold_range[0], threshold_range[1], grid_points)
     all_results = []
     for t in thresholds:
         m = calculate_metrics(y_true, y_pred_proba, float(t))
@@ -328,6 +341,64 @@ def _refine_thresholds_adaptive(y_true: np.ndarray, y_pred_proba: np.ndarray, se
     return best_overall
 
 
+def _bisection_threshold_search(y_true: np.ndarray, y_pred_proba: np.ndarray,
+                                target_delta: float,
+                                threshold_min: float = 0.05,
+                                threshold_max: float = 0.95,
+                                iterations: int = 20,
+                                tol: float = 1e-4,
+                                verbose: bool = False):
+    """Simple bisection to solve delta(threshold) = target_delta.
+
+    Assumes delta(threshold) = accuracy_drone - accuracy_ambient is monotonic
+    (typically decreasing as threshold increases). If the target is not
+    bracketed between the endpoints, returns None.
+    Returns (threshold, metrics) on success, or None if bracketing fails.
+    """
+    evaluated = []
+
+    def delta_and_metrics(t):
+        m = calculate_metrics(y_true, y_pred_proba, float(t))
+        delta = m["accuracy_drone"] - m["accuracy_ambient"]
+        m["delta_drone_minus_ambient"] = float(delta)
+        m["gap_to_target_delta"] = float(abs(delta - target_delta))
+        m["abs_accuracy_gap"] = float(abs(delta))
+        evaluated.append(m)
+        return delta, m
+
+    lo = float(threshold_min)
+    hi = float(threshold_max)
+    delta_lo, m_lo = delta_and_metrics(lo)
+    delta_hi, m_hi = delta_and_metrics(hi)
+
+    if (delta_lo - target_delta) * (delta_hi - target_delta) > 0:
+        if verbose:
+            print("[bisection] target not bracketed: delta(lo) and delta(hi) same side of target")
+        return None
+
+    mid = None
+    m_mid = None
+    for i in range(iterations):
+        mid = 0.5 * (lo + hi)
+        delta_mid, m_mid = delta_and_metrics(mid)
+        if verbose:
+            print(f"[bisection] iter={i+1} lo={lo:.4f} hi={hi:.4f} mid={mid:.6f} delta_mid={delta_mid:.4f} gap={abs(delta_mid-target_delta):.6f}")
+        if abs(delta_mid - target_delta) <= tol:
+            return float(mid), m_mid, evaluated
+        # choose side that contains a sign change relative to target
+        if (delta_lo - target_delta) * (delta_mid - target_delta) <= 0:
+            hi = mid
+            delta_hi = delta_mid
+            m_hi = m_mid
+        else:
+            lo = mid
+            delta_lo = delta_mid
+            m_lo = m_mid
+
+    # return final mid candidate
+    return float(mid), m_mid, evaluated
+
+
 def load_validation_predictions(model_name: str):
     """
     Load model and validation features, compute probabilities.
@@ -351,6 +422,8 @@ def load_validation_predictions(model_name: str):
         "MOBILENET": config.MOBILENET_MODEL_PATH,
         "CONFORMER": config.CONFORMER_MODEL_PATH,
         "TCN": config.TCN_MODEL_PATH,
+        "AST": config.AST_MODEL_PATH,
+        "MULTIRES": config.MULTIRES_MODEL_PATH,
     }
 
     model_path = model_paths.get(model_name.upper())
@@ -428,7 +501,7 @@ def main():
     p = argparse.ArgumentParser(description="Calibrate classification thresholds (balanced per-class accuracy, drone-first)")
 
     p.add_argument("--model", type=str,
-                   choices=["CNN", "RNN", "CRNN", "ATTENTION_CRNN", "EFFICIENTNET", "MOBILENET", "CONFORMER", "TCN"],
+                   choices=["CNN", "RNN", "CRNN", "ATTENTION_CRNN", "EFFICIENTNET", "MOBILENET", "CONFORMER", "TCN", "AST", "MULTIRES"],
                    help="Model to calibrate")
     p.add_argument("--all-models", action="store_true", help="Calibrate all models")
 
@@ -460,6 +533,16 @@ def main():
     p.add_argument("--refine-stop-tol", type=float, default=1e-8,
                    help="Stop tolerance for refinement when threshold change is below this (default: 1e-8)")
 
+    # Bisection (dichotomy) behavior: enabled by default via config, provide
+    # --no-bisection to disable and fall back to grid search.
+    p.add_argument("--no-bisection", dest="bisection", action="store_false",
+                   help="Disable bisection (use grid search instead)")
+    p.add_argument("--bisection-iterations", type=int, default=config.CALIBRATION_BISECTION_ITERATIONS,
+                   help=f"Bisection iterations when using bisection (default: {config.CALIBRATION_BISECTION_ITERATIONS})")
+    p.add_argument("--bisection-tol", type=float, default=config.CALIBRATION_BISECTION_TOL,
+                   help=f"Tolerance for delta gap when using bisection (default: {config.CALIBRATION_BISECTION_TOL})")
+    p.set_defaults(bisection=config.CALIBRATION_BISECTION_DEFAULT)
+
     p.add_argument("--output", type=str, default=None,
                    help="Output JSON file (default: results/calibrated_thresholds.json)")
 
@@ -469,7 +552,7 @@ def main():
         p.error("Either --model or --all-models must be specified")
 
     if args.all_models:
-        models = ["CNN", "RNN", "CRNN", "ATTENTION_CRNN", "EFFICIENTNET", "MOBILENET", "CONFORMER", "TCN"]
+        models = ["CNN", "RNN", "CRNN", "ATTENTION_CRNN", "EFFICIENTNET", "MOBILENET", "CONFORMER", "TCN", "AST", "MULTIRES"]
     else:
         models = [args.model]
 
@@ -499,21 +582,58 @@ def main():
         try:
             y_val, y_pred_proba = load_validation_predictions(model_name)
 
-            thr, optimal, all_results, relax_info = optimize_threshold_balanced(
-                y_val,
-                y_pred_proba,
-                balance_target_delta=args.balance_target_delta,
-                max_balance_gap=args.max_balance_gap,
-                min_recall=args.min_recall,
-                min_precision_drone=args.min_precision_drone,
-                min_precision_ambient=args.min_precision_ambient,
-                threshold_range=(args.threshold_min, args.threshold_max),
-                threshold_step=args.threshold_step,
-                verbose=True,
-            )
+            thr = None
+            optimal = None
+            all_results = []
+            relax_info = None
+
+            bisection_used = False
+            if args.bisection:
+                bres = _bisection_threshold_search(
+                    y_val, y_pred_proba,
+                    target_delta=args.balance_target_delta,
+                    threshold_min=args.threshold_min, threshold_max=args.threshold_max,
+                    iterations=args.bisection_iterations, tol=args.bisection_tol,
+                    verbose=True,
+                )
+                if bres is None:
+                    print("[bisection] Bisection failed to bracket target; falling back to grid search.")
+                    thr, optimal, all_results, relax_info = optimize_threshold_balanced(
+                        y_val,
+                        y_pred_proba,
+                        balance_target_delta=args.balance_target_delta,
+                        max_balance_gap=args.max_balance_gap,
+                        min_recall=args.min_recall,
+                        min_precision_drone=args.min_precision_drone,
+                        min_precision_ambient=args.min_precision_ambient,
+                        threshold_range=(args.threshold_min, args.threshold_max),
+                        threshold_step=args.threshold_step,
+                        verbose=True,
+                    )
+                    bisection_used = False
+                else:
+                    thr, optimal, evaluated = bres
+                    all_results = evaluated if evaluated is not None else [optimal]
+                    bisection_used = True
+            else:
+                thr, optimal, all_results, relax_info = optimize_threshold_balanced(
+                    y_val,
+                    y_pred_proba,
+                    balance_target_delta=args.balance_target_delta,
+                    max_balance_gap=args.max_balance_gap,
+                    min_recall=args.min_recall,
+                    min_precision_drone=args.min_precision_drone,
+                    min_precision_ambient=args.min_precision_ambient,
+                    threshold_range=(args.threshold_min, args.threshold_max),
+                    threshold_step=args.threshold_step,
+                    verbose=True,
+                )
+                bisection_used = False
 
             # Optional refinement stage: run local adaptive search around top candidates
-            if args.refine:
+            # Skip adaptive refinement if we used bisection successfully —
+            # refinement may undesirably override the bisection result.
+            if args.refine and not bisection_used:
                 # choose top seeds from the discrete grid (few best by original ranking)
                 def rank_key_for_sort(m):
                     gap = m["gap_to_target_delta"]

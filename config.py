@@ -111,6 +111,16 @@ TCN_MODEL_PATH = MODELS_DIR / "tcn_model.keras"
 TCN_HISTORY_PATH = RESULTS_DIR / "tcn_history.csv"
 TCN_ACC_PATH = RESULTS_DIR / "tcn_accuracy.json"
 
+# Audio Spectrogram Transformer (AST) Model paths
+AST_MODEL_PATH = MODELS_DIR / "ast_model.keras"
+AST_HISTORY_PATH = RESULTS_DIR / "ast_history.csv"
+AST_ACC_PATH = RESULTS_DIR / "ast_accuracy.json"
+
+# Multi-Resolution Front-End Model paths
+MULTIRES_MODEL_PATH = MODELS_DIR / "multires_model.keras"
+MULTIRES_HISTORY_PATH = RESULTS_DIR / "multires_history.csv"
+MULTIRES_ACC_PATH = RESULTS_DIR / "multires_accuracy.json"
+
 # All models accuracy path
 ALL_MODELS_ACC_PATH = RESULTS_DIR / "all_model_acc.json"
 
@@ -215,11 +225,11 @@ TF_INTRA_OP_PARALLELISM_THREADS = int(_os.environ.get('TF_INTRA_OP_THREADS', 10)
 TF_INTER_OP_PARALLELISM_THREADS = int(_os.environ.get('TF_INTER_OP_THREADS', 2))   # Op coordination: keep low
 
 # Training parameters (centralized)
-MIN_EPOCHS = 1  # Minimum epochs before early stopping can trigger
-MAX_EPOCHS = 2 # Maximum epochs limit
-# Reduce default batch size to introduce more gradient noise and improve
-# generalization on smaller datasets / limited augmentation.
-BATCH_SIZE = 32  # Reduced from 32 to 16 to lower memory/CPU usage
+MIN_EPOCHS = 25  # Minimum epochs before early stopping can trigger
+MAX_EPOCHS = 250 # Maximum epochs limit
+# Reduce default batch size to lower GPU memory pressure while preserving
+# stable throughput on mid-range hardware.
+BATCH_SIZE = 32
 # Learning rate (default for all models)
 LEARNING_RATE = 0.0001  # Default learning rate
 
@@ -267,9 +277,9 @@ PROP_DOMAIN_DEFAULTS = {
 # training, extraction and inference.
 MFCC_N_MFCC = 20            # number of MFCCs to extract
 MEL_DURATION = float(AUDIO_DURATION_S)        # seconds used per example at training/inference
-MEL_N_MELS = 64           # number of mel bins
-MEL_N_FFT = 2048          # FFT window size
-MEL_HOP_LENGTH = 512      # hop length in samples
+MEL_N_MELS = 64           # number of mel bins 64
+MEL_N_FFT = 2048          # FFT window size 2048
+MEL_HOP_LENGTH = 512      # hop length in samples 512
 # Compute number of time frames from sample rate / duration / hop length and segments.
 # This keeps features consistent when `MEL_HOP_LENGTH`, `SAMPLE_RATE` or `AUDIO_DURATION_S` change.
 _samples_per_track = int(SAMPLE_RATE * float(AUDIO_DURATION_S))
@@ -308,6 +318,14 @@ MEL_TEST_NPZ_PATH = EXTRACTED_FEATURES_DIR / "mel_test.npz"
 AUTO_CALIBRATE_THRESHOLDS = True  # Set to True to auto-calibrate on first performance calculation
 CALIBRATION_FILE_PATH = RESULTS_DIR / "calibrated_thresholds.json"
 
+# Bisection (dichotomy) defaults for calibration
+# When True, calibration scripts will use a bisection search by default
+# to match the desired `balance_target_delta`. Iterations control the
+# maximum number of bisection steps performed.
+CALIBRATION_BISECTION_DEFAULT = True
+CALIBRATION_BISECTION_ITERATIONS = int(os.environ.get('CALIBRATION_BISECTION_ITERATIONS', '20'))
+CALIBRATION_BISECTION_TOL = float(os.environ.get('CALIBRATION_BISECTION_TOL', '0.001'))
+
 # Default calibration behaviour (used by `calibrate_thresholds.py` when run
 # non-interactively or by automation). Use 'class_aware' to balance per-class
 # precision targets (recommended for reducing ambient false positives).
@@ -328,9 +346,8 @@ TARGET_RECALL = 0.95  # Target recall for threshold calibration (fallback when u
 
 # --- Training parameters (source of truth) --------------------------------
 # Batch size for training (used by all trainers when no CLI arg provided)
-# With reduced default batch size to introduce more gradient noise and improve
-# generalization on smaller datasets / limited augmentation.
-BATCH_SIZE = 32  # Default batch size for training
+# Conservative default to avoid ROCm OOM on constrained VRAM allocations.
+BATCH_SIZE = 16
 
 # Learning rate (default for all models)
 LEARNING_RATE = 0.0001
@@ -421,6 +438,18 @@ RNN_ACC_PATH_STR = get_path_str(RNN_ACC_PATH)
 CRNN_MODEL_PATH_STR = get_path_str(CRNN_MODEL_PATH)
 CRNN_HISTORY_PATH_STR = get_path_str(CRNN_HISTORY_PATH)
 CRNN_ACC_PATH_STR = get_path_str(CRNN_ACC_PATH)
+CONFORMER_MODEL_PATH_STR = get_path_str(CONFORMER_MODEL_PATH)
+CONFORMER_HISTORY_PATH_STR = get_path_str(CONFORMER_HISTORY_PATH)
+CONFORMER_ACC_PATH_STR = get_path_str(CONFORMER_ACC_PATH)
+TCN_MODEL_PATH_STR = get_path_str(TCN_MODEL_PATH)
+TCN_HISTORY_PATH_STR = get_path_str(TCN_HISTORY_PATH)
+TCN_ACC_PATH_STR = get_path_str(TCN_ACC_PATH)
+AST_MODEL_PATH_STR = get_path_str(AST_MODEL_PATH)
+AST_HISTORY_PATH_STR = get_path_str(AST_HISTORY_PATH)
+AST_ACC_PATH_STR = get_path_str(AST_ACC_PATH)
+MULTIRES_MODEL_PATH_STR = get_path_str(MULTIRES_MODEL_PATH)
+MULTIRES_HISTORY_PATH_STR = get_path_str(MULTIRES_HISTORY_PATH)
+MULTIRES_ACC_PATH_STR = get_path_str(MULTIRES_ACC_PATH)
 ALL_MODELS_ACC_PATH_STR = get_path_str(ALL_MODELS_ACC_PATH)
 CNN_PREDICTIONS_PATH_STR = get_path_str(CNN_PREDICTIONS_PATH)
 RNN_PREDICTIONS_PATH_STR = get_path_str(RNN_PREDICTIONS_PATH)
@@ -481,7 +510,9 @@ TRAINER_MODULES = {
     'EfficientNet_Trainer': 'efficientnet',
     'MobileNet_Trainer': 'mobilenet',
     'Conformer_Trainer': 'conformer',
-    'TCN_Trainer': 'tcn'
+    'TCN_Trainer': 'tcn',
+    'AST_Trainer': 'ast',
+    'MultiRes_Trainer': 'multires'
 }
 
 # Output format per trainer (for auto-detection)
@@ -493,5 +524,7 @@ TRAINER_OUTPUT_FORMATS = {
     'efficientnet': 'binary',       # Dense(1, sigmoid)
     'mobilenet': 'binary',          # Dense(1, sigmoid)
     'conformer': 'binary',          # Dense(1, sigmoid)
-    'tcn': 'binary'                 # Dense(1, sigmoid)
+    'tcn': 'binary',                # Dense(1, sigmoid)
+    'ast': 'binary',                # Dense(1, sigmoid)
+    'multires': 'binary'            # Dense(1, sigmoid)
 }

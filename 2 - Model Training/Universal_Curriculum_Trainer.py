@@ -75,6 +75,7 @@ class CurriculumScheduler(keras.callbacks.Callback):
     def __init__(self, 
                  difficulty_scores: np.ndarray,
                  total_epochs: int,
+                 labels: Optional[np.ndarray] = None,
                  strategy: str = 'linear',
                  warmup_epochs: int = 5,
                  initial_fraction: float = 0.5,
@@ -102,6 +103,19 @@ class CurriculumScheduler(keras.callbacks.Callback):
         # Sort indices by difficulty (ascending)
         self.sorted_indices = np.argsort(difficulty_scores)
         self.total_samples = len(difficulty_scores)
+
+        # Optional: labels for stratified selection within curriculum
+        self.labels = None if labels is None else np.asarray(labels)
+        self.classwise_sorted = None
+        if self.labels is not None:
+            # build per-class sorted index lists (preserve per-class difficulty ordering)
+            classes = np.unique(self.labels)
+            self.classwise_sorted = {}
+            for c in classes:
+                idxs = np.where(self.labels == c)[0]
+                # sort these indices by difficulty_scores
+                sorted_local = idxs[np.argsort(difficulty_scores[idxs])]
+                self.classwise_sorted[c] = list(sorted_local)
         
     def on_epoch_begin(self, epoch, logs=None):
         """Compute the subset of samples to use for this epoch."""
@@ -141,7 +155,62 @@ class CurriculumScheduler(keras.callbacks.Callback):
             num_samples = self.total_samples
         
         self.current_num_samples = num_samples
-        self.current_indices = self.sorted_indices[:num_samples]
+
+        # If labels were provided, perform stratified per-class selection preserving
+        # per-class difficulty ordering, and interleave classes to avoid mono-class blocks
+        if self.classwise_sorted is not None and num_samples < self.total_samples:
+            classes = list(self.classwise_sorted.keys())
+            n_classes = len(classes)
+
+            # Base quota per class, distribute remainder starting from first class
+            base = num_samples // n_classes
+            remainder = num_samples % n_classes
+            quotas = {c: base for c in classes}
+            for i, c in enumerate(classes):
+                if i < remainder:
+                    quotas[c] += 1
+
+            # Select up to quota from each class (preserve class-local ordering)
+            selected_per_class = {}
+            total_selected = 0
+            for c in classes:
+                avail = len(self.classwise_sorted[c])
+                take = min(quotas[c], avail)
+                selected_per_class[c] = self.classwise_sorted[c][:take]
+                total_selected += take
+
+            # If we couldn't fill num_samples (some classes short), fill remainder from other classes
+            if total_selected < num_samples:
+                needed = num_samples - total_selected
+                # iterate classes and take more where possible
+                for c in classes:
+                    avail = len(self.classwise_sorted[c]) - len(selected_per_class[c])
+                    if avail <= 0:
+                        continue
+                    add = min(avail, needed)
+                    selected_per_class[c] = self.classwise_sorted[c][:len(selected_per_class[c]) + add]
+                    needed -= add
+                    if needed == 0:
+                        break
+
+            # Interleave selections round-robin to mix classes
+            pointers = {c: 0 for c in classes}
+            mixed = []
+            while len(mixed) < num_samples:
+                progressed = False
+                for c in classes:
+                    lst = selected_per_class.get(c, [])
+                    p = pointers[c]
+                    if p < len(lst) and len(mixed) < num_samples:
+                        mixed.append(int(lst[p]))
+                        pointers[c] += 1
+                        progressed = True
+                if not progressed:
+                    break
+
+            self.current_indices = np.array(mixed, dtype=int)
+        else:
+            self.current_indices = self.sorted_indices[:num_samples]
         
         # Les infos de curriculum sont affichées dans le header principal
         # (pas besoin de message supplémentaire ici)
@@ -199,8 +268,8 @@ def get_model_builder(model_type: str):
     Dynamically import and return the build_model function from the appropriate trainer.
     
     Args:
-        model_type: One of 'cnn', 'rnn', 'crnn', 'attention_crnn', 'efficientnet', 
-                   'mobilenet', 'conformer', 'tcn'
+        model_type: One of 'cnn', 'rnn', 'crnn', 'attention_crnn', 'efficientnet',
+               'mobilenet', 'conformer', 'tcn', 'ast', 'multires'
     
     Returns:
         build_model function from the original trainer
@@ -268,9 +337,23 @@ def get_model_builder(model_type: str):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         _MODEL_BUILDERS['tcn'] = module.build_model
+
+    elif model_type == 'ast':
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ast_trainer", trainer_dir / "AST_Trainer.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _MODEL_BUILDERS['ast'] = module.build_model
+
+    elif model_type == 'multires':
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("multires_trainer", trainer_dir / "MultiRes_Trainer.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _MODEL_BUILDERS['multires'] = module.build_model
     else:
         raise ValueError(f"Unknown model type: {model_type}. Must be one of: "
-                        f"cnn, rnn, crnn, attention_crnn, efficientnet, mobilenet, conformer, tcn")
+                        f"cnn, rnn, crnn, attention_crnn, efficientnet, mobilenet, conformer, tcn, ast, multires")
     
     return _MODEL_BUILDERS[model_type]
 
@@ -326,11 +409,11 @@ def main():
     # Model configuration
     parser.add_argument('--model', type=str, required=True,
                        choices=['cnn', 'rnn', 'crnn', 'attention_crnn', 'efficientnet', 
-                               'mobilenet', 'conformer', 'tcn'],
+                       'mobilenet', 'conformer', 'tcn', 'ast', 'multires'],
                        help='Model architecture to train')
     
     # Model-specific parameters
-    parser.add_argument('--blocks', type=int, default=4,
+    parser.add_argument('--blocks', type=int, default=6,
                        help='Number of conformer blocks (conformer only)')
     parser.add_argument('--num_classes', type=int, default=2,
                        help='Number of output classes (for attention_crnn)')
@@ -438,7 +521,8 @@ def main():
     confusion_cb = ConfusionMatrixLogger(
         validation_data=(X_val, y_val),
         output_format=output_format,
-        verbose=1
+        verbose=1,
+        predict_batch_size=min(8, args.batch_size)
     )
     
     callbacks_list = [
@@ -460,6 +544,7 @@ def main():
         curr_config = config.CURRICULUM_LEARNING
         curriculum_scheduler = CurriculumScheduler(
             difficulty_scores=difficulty_train,
+            labels=y_train,
             total_epochs=args.max_epochs,
             strategy=args.curriculum_strategy,
             warmup_epochs=args.warmup_epochs,
@@ -474,7 +559,7 @@ def main():
     
     # Model save paths (nom standard sans suffix curriculum)
     model_name = f"{args.model}_model"
-    model_save_path = config.RESULTS_DIR / 'saved_models' / f"{model_name}.keras"
+    model_save_path = config.MODELS_DIR / f"{model_name}.keras"
     history_save_path = config.RESULTS_DIR / f"{args.model}_history.csv"
     
     model_save_path.parent.mkdir(parents=True, exist_ok=True)

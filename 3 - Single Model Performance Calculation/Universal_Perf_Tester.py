@@ -20,6 +20,7 @@ import tensorflow as tf
 import os
 import multiprocessing
 import re
+import time
 from collections import defaultdict
 from datetime import datetime
 import typing
@@ -66,7 +67,7 @@ def calculate_metrics(tp, tn, fp, fn):
 def main():
     parser = argparse.ArgumentParser(description='Test un modèle sur un dataset avec métriques ML complètes')
     parser.add_argument('--model', type=str, required=True, 
-                        choices=['CNN', 'RNN', 'CRNN', 'ATTENTION_CRNN', 'EFFICIENTNET', 'MOBILENET', 'CONFORMER', 'TCN'],
+                        choices=['CNN', 'RNN', 'CRNN', 'ATTENTION_CRNN', 'EFFICIENTNET', 'MOBILENET', 'CONFORMER', 'TCN', 'AST', 'MULTIRES'],
                         help='Modèle à tester')
     parser.add_argument('--split', type=str, required=True,
                         choices=['train', 'val', 'test'],
@@ -86,7 +87,9 @@ def main():
         'EFFICIENTNET': config.EFFICIENTNET_MODEL_PATH,
         'MOBILENET': config.MOBILENET_MODEL_PATH,
         'CONFORMER': config.CONFORMER_MODEL_PATH,
-        'TCN': config.TCN_MODEL_PATH
+        'TCN': config.TCN_MODEL_PATH,
+        'AST': config.AST_MODEL_PATH,
+        'MULTIRES': config.MULTIRES_MODEL_PATH,
     }
     model_path = model_paths[args.model]
     
@@ -438,15 +441,51 @@ def main():
     except Exception:
         pass
 
-    # Predict in batches
+    # Predict in batches with progress and ETA every 10%
+    total_samples = X_batch.shape[0]
     batch_size = getattr(config, 'BATCH_SIZE', 32)
-    preds = model.predict(X_batch, batch_size=batch_size, verbose=0)
 
-    # Convert model outputs to probabilities for class 1
-    if preds.ndim > 1 and preds.shape[1] > 1:
-        probs = np.array(preds)[:, 1].astype(float)
-    else:
-        probs = np.array(preds).reshape(-1).astype(float)
+    def _format_eta(seconds: float) -> str:
+        if seconds < 0:
+            return "?"
+        m, s = divmod(int(seconds + 0.5), 60)
+        h, m = divmod(m, 60)
+        if h > 0:
+            return f"{h}h{m:02d}m{int(s):02d}s"
+        if m > 0:
+            return f"{m}m{int(s):02d}s"
+        return f"{int(s)}s"
+
+    preds_parts = []
+    processed = 0
+    start_time = time.time()
+    next_report = 10
+    print(f"Running batched prediction: {total_samples} samples, batch_size={batch_size}")
+    while processed < total_samples:
+        i = processed
+        j = min(total_samples, i + batch_size)
+        batch = X_batch[i:j]
+        t0 = time.time()
+        p = model.predict(batch, batch_size=len(batch), verbose=0)
+        dt = time.time() - t0
+        # normalize prediction shape
+        if p.ndim > 1 and p.shape[1] > 1:
+            pvals = np.array(p)[:, 1].astype(float)
+        else:
+            pvals = np.array(p).reshape(-1).astype(float)
+        preds_parts.append(pvals)
+        processed += len(batch)
+
+        pct = int(processed * 100 / total_samples)
+        if pct >= next_report or processed == total_samples:
+            elapsed = time.time() - start_time
+            avg_per_sample = elapsed / max(1, processed)
+            remaining = total_samples - processed
+            eta = remaining * avg_per_sample
+            print(f"Progress: {pct}% ({processed}/{total_samples}) — ETA: {_format_eta(eta)} — avg/sample {avg_per_sample:.4f}s")
+            next_report += 10
+
+    probs = np.concatenate(preds_parts, axis=0)
 
     for filename, true_label, prob in zip(filenames, labels_list, probs):
         pred_class = 1 if prob > resolved_threshold else 0

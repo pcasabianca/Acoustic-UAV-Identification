@@ -5,7 +5,7 @@
 # Pipeline modernisé reflétant la nouvelle architecture:
 # 1. Préparation du dataset (master_setup_v3.py)
 # 2. Extraction des features MEL (Mel_Preprocess_and_Feature_Extract.py)
-# 3. Entraînement des modèles (CNN, RNN, CRNN, ATTENTION_CRNN, EFFICIENTNET, MOBILENET, CONFORMER, TCN)
+# 3. Entraînement des modèles (CNN, RNN, CRNN, ATTENTION_CRNN, EFFICIENTNET, MOBILENET, CONFORMER, TCN, AST, MULTIRES)
 # 4. Calibration des thresholds (calibrate_thresholds.py - multi-critères)
 # 5. Évaluation des performances (Universal_Perf_Tester.py)
 # 6. Visualisations (run_visualizations.py)
@@ -20,7 +20,9 @@
 #   --skip-training       Skip model training (reuse existing models)
 #   --skip-calibration    Skip threshold calibration (use existing thresholds)
 #   --skip-testing        Skip performance testing (reuse existing results)
-#   --models MODEL1,MODEL2  Train only specific models (CNN,RNN,CRNN,ATTENTION_CRNN,EFFICIENTNET,MOBILENET,CONFORMER,TCN)
+#   --models MODEL1,MODEL2  Train only specific models (CNN,RNN,CRNN,ATTENTION_CRNN,EFFICIENTNET,MOBILENET,CONFORMER,TCN,AST,MULTIRES)
+#   --ssl-pretrain        Use Universal_SSL_Trainer instead of per-model trainer wrappers
+#   --ssl-epochs N        Number of SSL pretraining epochs (default: 5)
 #   --parallel            Train models in parallel (faster but more CPU)
 #   --skip-viz            Skip visualizations
 #   --use-class-aware-calibration  Use legacy class-aware calibration (deprecated)
@@ -37,6 +39,14 @@
 
 set -e  # Exit on error
 
+# Ensure a sane PATH in non-interactive/nohup/sandbox contexts
+DEFAULT_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/run/host/usr/bin:/run/host/usr/local/bin"
+if [ -z "${PATH:-}" ]; then
+    export PATH="$DEFAULT_PATH"
+else
+    export PATH="$PATH:$DEFAULT_PATH"
+fi
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -51,7 +61,7 @@ SKIP_DATASET=false
 SKIP_FEATURES=false
 SKIP_TRAINING=false
 SKIP_TESTING=false
-MODELS="CNN,RNN,CRNN,ATTENTION_CRNN,EFFICIENTNET,MOBILENET,CONFORMER,TCN"
+MODELS="CNN,RNN,CRNN,ATTENTION_CRNN,EFFICIENTNET,MOBILENET,CONFORMER,TCN,AST,MULTIRES"
 PARALLEL=false
 THRESHOLDS="0.5"
 SKIP_VIZ=false
@@ -76,6 +86,8 @@ WORKERS="$DEFAULT_WORKERS"
 AUGMENT_SAMPLES=""
 AUGMENT_WORKERS="$WORKERS"
 MID_SCALE=false
+SSL_PRETRAIN=false
+SSL_EPOCHS=5
 
 # Check for --no-nohup flag first (before parsing other args)
 USE_NOHUP=true
@@ -128,6 +140,14 @@ while [[ $# -gt 0 ]]; do
         --parallel)
             PARALLEL=true
             shift
+            ;;
+        --ssl-pretrain)
+            SSL_PRETRAIN=true
+            shift
+            ;;
+        --ssl-epochs)
+            SSL_EPOCHS="$2"
+            shift 2
             ;;
         --thresholds)
             THRESHOLDS="$2"
@@ -196,7 +216,7 @@ if [ "$USE_NOHUP" = true ] && [ -z "${NOHUP_LAUNCHED:-}" ]; then
     # Use the preserved original args so flags like --skip-* are forwarded
     # Use absolute path to this script to ensure nohup can execute it from any cwd
     SCRIPT_ABS="$PROJECT_DIR/$(basename "$0")"
-    env NOHUP_LAUNCHED=1 PYTHONUNBUFFERED=1 nohup "$SCRIPT_ABS" "${ORIGINAL_ARGS[@]}" --no-nohup > "$LOG_FILE" 2>&1 &
+    env NOHUP_LAUNCHED=1 nohup "$SCRIPT_ABS" "${ORIGINAL_ARGS[@]}" --no-nohup > "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
     echo "Started background process PID=$(cat $PID_FILE)"
     exit 0
@@ -249,6 +269,8 @@ print_header() {
     log INFO "Thresholds: $THRESHOLDS"
     log INFO "Skip Viz: $SKIP_VIZ"
     log INFO "Trainer Flags: $TRAINER_FLAGS"
+    log INFO "SSL Pretrain: $SSL_PRETRAIN"
+    log INFO "SSL Epochs: $SSL_EPOCHS"
     echo ""
 }
 
@@ -257,28 +279,60 @@ check_gpu_support() {
     GPU_AVAILABLE=false
     ROCM_IMAGE="acoustic-uav-rocm"
     GFX_VERSION="11.0.2"
-    
-    # Use absolute paths for podman and rocm-smi (nohup loses PATH)
-    PODMAN_BIN="/usr/bin/podman"
-    ROCM_SMI_BIN="/usr/bin/rocm-smi"
-    
+
+    # Resolve binaries robustly (PATH may differ under nohup/non-interactive/sandbox shells)
+    PODMAN_BIN="$(command -v podman 2>/dev/null || true)"
+    ROCM_SMI_BIN="$(command -v rocm-smi 2>/dev/null || true)"
+
+    # Fallback to common host and system locations
+    if [ -z "$PODMAN_BIN" ]; then
+        for candidate in \
+            "/usr/bin/podman" \
+            "/bin/podman" \
+            "/usr/local/bin/podman" \
+            "/run/host/usr/bin/podman" \
+            "/run/host/usr/local/bin/podman"; do
+            if [ -x "$candidate" ]; then
+                PODMAN_BIN="$candidate"
+                break
+            fi
+        done
+    fi
+
+    if [ -z "$ROCM_SMI_BIN" ]; then
+        for candidate in \
+            "/usr/bin/rocm-smi" \
+            "/opt/rocm/bin/rocm-smi" \
+            "/run/host/usr/bin/rocm-smi" \
+            "/run/host/opt/rocm/bin/rocm-smi"; do
+            if [ -x "$candidate" ]; then
+                ROCM_SMI_BIN="$candidate"
+                break
+            fi
+        done
+    fi
+
     # Check if podman and rocm-smi are available
-    if [ -x "$PODMAN_BIN" ] && [ -x "$ROCM_SMI_BIN" ]; then
+    if [ -n "$PODMAN_BIN" ] && [ -n "$ROCM_SMI_BIN" ]; then
         # Check if custom image is present
-        if $PODMAN_BIN images | grep -q "acoustic-uav-rocm"; then
+        if "$PODMAN_BIN" images | grep -q "acoustic-uav-rocm"; then
             # Check if GPU is detected
-            if $ROCM_SMI_BIN --showproductname &> /dev/null; then
+            if "$ROCM_SMI_BIN" --showproductname &> /dev/null; then
                 GPU_AVAILABLE=true
                 log SUCCESS "GPU AMD détecté - Entraînement avec accélération GPU activé"
+            else
+                log WARN "rocm-smi détecté mais GPU non accessible depuis ce contexte"
             fi
-        elif $PODMAN_BIN images | grep -q "rocm/tensorflow"; then
+        elif "$PODMAN_BIN" images | grep -q "rocm/tensorflow"; then
             log INFO "Image de base présente mais pas l'image personnalisée"
             log INFO "Construction de l'image personnalisée..."
-            if $PODMAN_BIN build -t acoustic-uav-rocm -f "$PROJECT_DIR/Dockerfile.rocm" "$PROJECT_DIR" &>> "$LOG_FILE"; then
+            if "$PODMAN_BIN" build -t acoustic-uav-rocm -f "$PROJECT_DIR/Dockerfile.rocm" "$PROJECT_DIR" &>> "$LOG_FILE"; then
                 ROCM_IMAGE="acoustic-uav-rocm"
-                if $ROCM_SMI_BIN --showproductname &> /dev/null; then
+                if "$ROCM_SMI_BIN" --showproductname &> /dev/null; then
                     GPU_AVAILABLE=true
                     log SUCCESS "GPU AMD détecté - Entraînement avec accélération GPU activé"
+                else
+                    log WARN "Image ROCm prête mais GPU non accessible depuis ce contexte"
                 fi
             else
                 log WARN "Échec de construction de l'image - Entraînement sur CPU"
@@ -288,7 +342,7 @@ check_gpu_support() {
             log INFO "Pour activer le GPU: ./gpu.sh --test"
         fi
     else
-        log WARN "GPU tools not found ($PODMAN_BIN or $ROCM_SMI_BIN) - Training on CPU only"
+        log WARN "GPU tools not found (podman='$PODMAN_BIN', rocm-smi='$ROCM_SMI_BIN') - Training on CPU only"
     fi
     
     if [ "$GPU_AVAILABLE" = false ]; then
@@ -311,7 +365,7 @@ run_python() {
     
     if [ "$GPU_AVAILABLE" = true ] && [ "$force_cpu" = false ]; then
         log INFO "Exécution avec GPU: $script"
-        /usr/bin/podman run --rm \
+        "$PODMAN_BIN" run --rm \
             --device=/dev/kfd \
             --device=/dev/dri \
             --group-add video \
@@ -319,13 +373,11 @@ run_python() {
             --security-opt label=disable \
             -v "$PROJECT_DIR:/workspace:rw" \
             -w "/workspace" \
-            -e PYTHONUNBUFFERED=1 \
             -e HSA_OVERRIDE_GFX_VERSION="$GFX_VERSION" \
             "$ROCM_IMAGE" \
-            python3 -u "/workspace/$script" $args
+            python3 "/workspace/$script" $args
     else
-        # Run Python in unbuffered mode so stdout/stderr are flushed immediately
-        "$VENV_PATH" -u "$script" $args
+        "$VENV_PATH" "$script" $args
     fi
 }
 
@@ -375,6 +427,9 @@ check_prerequisites() {
         "2 - Model Training/MobileNet_Trainer.py"
         "2 - Model Training/Conformer_Trainer.py"
         "2 - Model Training/TCN_Trainer.py"
+        "2 - Model Training/AST_Trainer.py"
+        "2 - Model Training/MultiRes_Trainer.py"
+        "2 - Model Training/Universal_SSL_Trainer.py"
         "3 - Single Model Performance Calculation/Universal_Perf_Tester.py"
         "3 - Single Model Performance Calculation/calibrate_thresholds.py"
         "6 - Visualization/run_visualizations.py"
@@ -535,16 +590,30 @@ train_single_model() {
         TCN)
             trainer="TCN_Trainer.py"
             ;;
+        AST)
+            trainer="AST_Trainer.py"
+            ;;
+        MULTIRES)
+            trainer="MultiRes_Trainer.py"
+            ;;
         *)
             log ERROR "Unknown model: $model"
             return 1
             ;;
     esac
     
-    # Forward any trainer-specific flags (e.g. --min_epochs, --max_epochs, --use_dynamic_weight, --dyn_min_w, --dyn_max_w, --batch_size)
-    if ! run_python "2 - Model Training/$trainer" $TRAINER_FLAGS; then
-        log ERROR "$model training failed"
-        return 1
+    if [ "$SSL_PRETRAIN" = true ]; then
+        # SSL route: universal self-supervised pretraining + supervised fine-tuning
+        if ! run_python "2 - Model Training/Universal_SSL_Trainer.py" --model "$model_lower" --ssl_epochs "$SSL_EPOCHS" $TRAINER_FLAGS; then
+            log ERROR "$model SSL training failed"
+            return 1
+        fi
+    else
+        # Forward any trainer-specific flags (e.g. --min_epochs, --max_epochs, --use_dynamic_weight, --dyn_min_w, --dyn_max_w, --batch_size)
+        if ! run_python "2 - Model Training/$trainer" $TRAINER_FLAGS; then
+            log ERROR "$model training failed"
+            return 1
+        fi
     fi
     
     log SUCCESS "$model trained successfully"
@@ -580,7 +649,8 @@ calibrate_thresholds() {
     
     for model in $CALIB_MODELS; do
         log INFO "  • Calibrating $model thresholds..."
-        if "$VENV_PATH" "$calibrator" --model "$model" 2>&1 | grep -v "cuda\|CUDA\|GPU"; then
+        # Run unbuffered Python and use line-buffered grep so log lines are flushed live
+        if PYTHONUNBUFFERED=1 "$VENV_PATH" -u "$calibrator" --model "$model" 2>&1 | grep --line-buffered -v "cuda\|CUDA\|GPU"; then
             log SUCCESS "  ✓ $model calibration complete"
         else
             log WARN "  ✗ $model calibration failed"
@@ -628,7 +698,8 @@ calculate_performance() {
     for model in "${MODEL_ARRAY[@]}"; do
         for split in train val test; do
             log INFO "  • Calibrated test: $model on $split"
-            if ! "$VENV_PATH" "$tester" --model "$model" --split "$split" --workers "$WORKERS" 2>&1 | grep -v "cuda\|CUDA\|GPU"; then
+            # Run tester unbuffered; stream through line-buffered grep to see live output
+            if ! PYTHONUNBUFFERED=1 "$VENV_PATH" -u "$tester" --model "$model" --split "$split" --workers "$WORKERS" 2>&1 | grep --line-buffered -v "cuda\|CUDA\|GPU"; then
                 log WARN "    ✗ Calibrated test failed: $model $split"
                 ((failed_tests++))
             fi
@@ -648,12 +719,12 @@ calculate_performance() {
         for split in train val test; do
             log INFO "  • Testing $model on $split..."
             
-            if "$VENV_PATH" "$tester" \
+            if PYTHONUNBUFFERED=1 "$VENV_PATH" -u "$tester" \
                 --model "$model" \
                 --split "$split" \
                 --workers "$WORKERS" 2>&1 | \
-                grep -E "(Dataset|Test en cours|Loaded calibrated|Accuracy|Résultats sauvegardés)" | \
-                grep -v "cuda\|CUDA\|GPU" > /dev/null; then
+                grep --line-buffered -E "(Dataset|Test en cours|Loaded calibrated|Accuracy|Résultats sauvegardés)" | \
+                grep --line-buffered -v "cuda\|CUDA\|GPU" > /dev/null; then
                 log SUCCESS "  ✓ $model $split"
             else
                 log WARN "  ✗ Test failed: $model $split"
@@ -688,7 +759,8 @@ generate_visualizations() {
     
     log INFO "Running unified visualization pipeline..."
     
-    if ! "$VENV_PATH" "$viz_script" 2>&1 | grep -v "cuda\|CUDA\|GPU"; then
+    # Run visualization unbuffered and stream output live
+    if ! PYTHONUNBUFFERED=1 "$VENV_PATH" -u "$viz_script" 2>&1 | grep --line-buffered -v "cuda\|CUDA\|GPU"; then
         log WARN "Visualization generation had warnings (non-fatal)"
     else
         log SUCCESS "Enhanced visualizations generated successfully"

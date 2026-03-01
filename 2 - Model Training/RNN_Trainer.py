@@ -140,23 +140,3 @@ if __name__ == "__main__":
 
     result = subprocess.run(cmd)
     sys.exit(result.returncode)
-
-
-if __name__ == "__main__":
-    # Delegate training to the Universal_Curriculum_Trainer. Keep this module
-    # focused on model construction via `build_model`.
-    import sys
-    import subprocess
-    from pathlib import Path
-
-    cmd = [
-        sys.executable,
-        str(Path(__file__).parent / 'Universal_Curriculum_Trainer.py'),
-        '--model', 'rnn'
-    ]
-    # Forward any CLI args the user provided to the universal trainer
-    if len(sys.argv) > 1:
-        cmd.extend(sys.argv[1:])
-
-    result = subprocess.run(cmd)
-    sys.exit(result.returncode)

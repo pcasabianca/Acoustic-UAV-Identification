@@ -82,7 +82,7 @@ def test_trainer(model_type, trainer_module):
         
         # Certains modèles ont des paramètres spéciaux
         if model_type == 'conformer':
-            model = build_model_func(input_shape, num_blocks=2)
+            model = build_model_func(input_shape=input_shape, num_conformer_blocks=2)
         elif model_type in ['attention_crnn']:
             model = build_model_func(input_shape, num_classes=2)
         else:
@@ -163,7 +163,9 @@ def main():
         'efficientnet': 'EfficientNet_Trainer',
         'mobilenet': 'MobileNet_Trainer',
         'conformer': 'Conformer_Trainer',
-        'tcn': 'TCN_Trainer'
+        'tcn': 'TCN_Trainer',
+        'ast': 'AST_Trainer',
+        'multires': 'MultiRes_Trainer'
     }
     
     results = {}

@@ -154,7 +154,7 @@ class ConfusionMatrixLogger(keras.callbacks.Callback):
     Callback qui affiche la matrice de confusion (TP, TN, FP, FN) à chaque epoch.
     Compatible avec les modèles binaires et catégoriels.
     """
-    def __init__(self, validation_data, output_format='categorical', verbose=1):
+    def __init__(self, validation_data, output_format='categorical', verbose=1, predict_batch_size=8):
         """
         Args:
             validation_data: Tuple (X_val, y_val)
@@ -165,12 +165,39 @@ class ConfusionMatrixLogger(keras.callbacks.Callback):
         self.X_val, self.y_val = validation_data
         self.output_format = output_format
         self.verbose = verbose
+        self.predict_batch_size = max(1, int(predict_batch_size))
+
+    def _predict_safe(self):
+        """Run validation prediction with adaptive batch-size fallback to avoid OOM."""
+        batch_candidates = []
+        current = self.predict_batch_size
+        while current >= 1:
+            batch_candidates.append(current)
+            if current == 1:
+                break
+            current = max(1, current // 2)
+
+        last_error = None
+        for bs in batch_candidates:
+            try:
+                return self.model.predict(self.X_val, batch_size=bs, verbose=0)
+            except Exception as exc:
+                last_error = exc
+                if self.verbose:
+                    print(colored(f"[Confusion] Predict OOM/failure with batch_size={bs}, retrying...", "yellow"))
+
+        if self.verbose:
+            err_msg = str(last_error) if last_error is not None else "unknown error"
+            print(colored(f"[Confusion] Skipped (prediction failed): {err_msg}", "yellow"))
+        return None
     
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
         
         # Prédictions
-        y_pred_proba = self.model.predict(self.X_val, verbose=0)
+        y_pred_proba = self._predict_safe()
+        if y_pred_proba is None:
+            return
         
         # Conversion selon format
         if self.output_format == 'binary':
