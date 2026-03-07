@@ -66,6 +66,11 @@ models/
 *.pth
 *.ckpt
 *.pb
+*.tflite
+
+# Archived Models folders
+models/Archive_*/
+
 
 # Training History and Logs
 results/

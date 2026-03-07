@@ -8,15 +8,14 @@
     "channels": 1,
     "normalize_peak": 0.95,
     "input_directory": "./audio_input",
-    "file_pattern": "*.wav",
-    "delete_after_processing": true
+    "file_pattern": "*.wav"
   },
   
   "detection": {
     "scan_interval_seconds": 4,
     "confidence_threshold_default": 0.5,
     "thresholds_file": "./thresholds.json",
-    "enabled_models": ["CNN", "RNN", "CRNN", "Attention-CRNN", "tcn", "efficientnet", "mobilenet"],
+    "enabled_models": ["CNN", "RNN", "CRNN", "Attention-CRNN", "tcn", "efficientnet", "mobilenet", "ast", "multires"],
     "voting_strategy": "majority",
     "min_consecutive_detections": 2,
     "reload_thresholds_every_prediction": true,
@@ -54,8 +53,8 @@
         "filename": "conformer_model.keras",
         "architecture": "Conformer",
         "description": "Conformer model with Lambda layers",
-        "calibrated_key": "conformer_model",
-        "safe_mode": false
+        "safe_mode": false,
+        "calibrated_key": "conformer_model"
       },
       "tcn": {
         "filename": "tcn_model.keras",
@@ -74,13 +73,25 @@
         "architecture": "MobileNet",
         "description": "MobileNet model",
         "calibrated_key": "mobilenet_model"
+      },
+      "ast": {
+        "filename": "ast_model.keras",
+        "architecture": "Audio Spectrogram Transformer",
+        "description": "AST model",
+        "calibrated_key": "ast_model"
+      },
+      "multires": {
+        "filename": "multires_model.keras",
+        "architecture": "Multi-Resolution CNN",
+        "description": "Multi-Resolution CNN model",
+        "calibrated_key": "multires_model"
       }
     }
   },
   
   "feature_extraction": {
     "mel_spectrogram": {
-      "n_mels": 44,
+      "n_mels": 128,
       "n_fft": 2048,
       "hop_length": 512,
       "fmin": 20,
@@ -94,37 +105,20 @@
   "output": {
     "log_directory": "./logs",
     "log_level": "INFO",
-    "save_predictions": true,
-    "predictions_file": "./logs/predictions.json",
     "alert_sound": false,
     "console_output": true,
     "timestamp_format": "%Y-%m-%d %H:%M:%S",
     "show_prediction_statistics": true
   },
   
-  "alerts": {
-    "enabled": true,
-    "methods": ["console", "log"],
-    "drone_detected_message": "🚨 DRONE DETECTED",
-    "no_drone_message": "✓ No drone detected",
-    "include_confidence": true,
-    "include_model_breakdown": true
-  },
-  
-  "performance": {
-    "use_gpu": false,
-    "batch_size": 1,
-    "num_threads": 2,
-    "memory_limit_mb": 512,
-    "optimize_for_raspberry_pi": true
-  },
-  
   "recording": {
     "enabled": false,
     "device_index": 0,
-    "auto_record": false,
-    "save_recordings": false,
+    "save_debug_recordings": true,
     "recordings_directory": "./recordings",
     "description": "Set enabled=true to record from microphone instead of file monitoring"
-  }
+  },
+
+  "inference_backend": "tflite",
+  "_inference_backend_note": "Set to 'tflite' to use TFLite models (.tflite), 'keras' to use Keras models (.keras). Per-model fallback is automatic if the preferred file is absent."
 }

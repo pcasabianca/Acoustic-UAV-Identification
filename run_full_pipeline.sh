@@ -2,13 +2,14 @@
 ################################################################################
 # Acoustic UAV Detection - Complete Pipeline (v3.2)
 # 
-# Pipeline modernisé reflétant la nouvelle architecture:
-# 1. Préparation du dataset (master_setup_v3.py)
-# 2. Extraction des features MEL (Mel_Preprocess_and_Feature_Extract.py)
-# 3. Entraînement des modèles (CNN, RNN, CRNN, ATTENTION_CRNN, EFFICIENTNET, MOBILENET, CONFORMER, TCN, AST, MULTIRES)
-# 4. Calibration des thresholds (calibrate_thresholds.py - multi-critères)
-# 5. Évaluation des performances (Universal_Perf_Tester.py)
-# 6. Visualisations (run_visualizations.py)
+# Updated pipeline reflecting the new architecture:
+# 1. Dataset preparation (master_setup_v3.py)
+# 2. MEL feature extraction (Mel_Preprocess_and_Feature_Extract.py)
+# 3. Model training (CNN, RNN, CRNN, ATTENTION_CRNN, EFFICIENTNET, MOBILENET, CONFORMER, TCN, AST, MULTIRES)
+# 4. Threshold calibration (calibrate_thresholds.py - multi-criteria)
+# 5. Performance evaluation (Universal_Perf_Tester.py)
+# 6. TFLite conversion and validation (tflite_conv_orchestrator.py)
+# 7. Visualizations (run_visualizations.py)
 #
 # Usage:
 #   ./run_full_pipeline.sh [OPTIONS]
@@ -25,6 +26,7 @@
 #   --ssl-epochs N        Number of SSL pretraining epochs (default: 5)
 #   --parallel            Train models in parallel (faster but more CPU)
 #   --skip-viz            Skip visualizations
+#   --skip-tflite-conversion  Skip TFLite conversion and validation
 #   --use-class-aware-calibration  Use legacy class-aware calibration (deprecated)
 #   --skip-pre-calib-eval  Skip baseline evaluation (legacy mode)
 #   --skip-post-calib-eval Skip post-calibration evaluation (legacy mode)
@@ -65,6 +67,7 @@ MODELS="CNN,RNN,CRNN,ATTENTION_CRNN,EFFICIENTNET,MOBILENET,CONFORMER,TCN,AST,MUL
 PARALLEL=false
 THRESHOLDS="0.5"
 SKIP_VIZ=false
+SKIP_TFLITE_CONVERSION=false
 USE_CLASS_AWARE_CAL=false
 SKIP_PRE_CALIB_EVAL=false
 SKIP_CALIBRATION=false
@@ -155,6 +158,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-viz)
             SKIP_VIZ=true
+            shift
+            ;;
+        --skip-tflite-conversion)
+            SKIP_TFLITE_CONVERSION=true
             shift
             ;;
         --skip-pre-calib-eval)
@@ -255,7 +262,7 @@ log() {
 print_header() {
     echo -e "${MAGENTA}"
     echo "================================================================================"
-    echo "  🚀 ACOUSTIC UAV DETECTION - FULL PIPELINE V3.0"
+    echo "  ACOUSTIC UAV DETECTION - FULL PIPELINE V3.0"
     echo "================================================================================"
     echo -e "${NC}"
     log INFO "Timestamp: $TIMESTAMP"
@@ -319,34 +326,34 @@ check_gpu_support() {
             # Check if GPU is detected
             if "$ROCM_SMI_BIN" --showproductname &> /dev/null; then
                 GPU_AVAILABLE=true
-                log SUCCESS "GPU AMD détecté - Entraînement avec accélération GPU activé"
+                log SUCCESS "AMD GPU detected - Training with GPU acceleration enabled"
             else
-                log WARN "rocm-smi détecté mais GPU non accessible depuis ce contexte"
+                log WARN "rocm-smi detected but GPU not accessible from this context"
             fi
         elif "$PODMAN_BIN" images | grep -q "rocm/tensorflow"; then
-            log INFO "Image de base présente mais pas l'image personnalisée"
-            log INFO "Construction de l'image personnalisée..."
+            log INFO "Base image found but custom image is missing"
+            log INFO "Building custom image..."
             if "$PODMAN_BIN" build -t acoustic-uav-rocm -f "$PROJECT_DIR/Dockerfile.rocm" "$PROJECT_DIR" &>> "$LOG_FILE"; then
                 ROCM_IMAGE="acoustic-uav-rocm"
                 if "$ROCM_SMI_BIN" --showproductname &> /dev/null; then
                     GPU_AVAILABLE=true
-                    log SUCCESS "GPU AMD détecté - Entraînement avec accélération GPU activé"
+                    log SUCCESS "AMD GPU detected - Training with GPU acceleration enabled"
                 else
-                    log WARN "Image ROCm prête mais GPU non accessible depuis ce contexte"
+                    log WARN "ROCm image ready but GPU not accessible from this context"
                 fi
             else
-                log WARN "Échec de construction de l'image - Entraînement sur CPU"
+                log WARN "Image build failed - training on CPU"
             fi
         else
-            log INFO "Image TensorFlow-ROCm non trouvée - Entraînement sur CPU uniquement"
-            log INFO "Pour activer le GPU: ./gpu.sh --test"
+            log INFO "TensorFlow-ROCm image not found - training on CPU only"
+            log INFO "To enable GPU: ./gpu.sh --test"
         fi
     else
         log WARN "GPU tools not found (podman='$PODMAN_BIN', rocm-smi='$ROCM_SMI_BIN') - Training on CPU only"
     fi
     
     if [ "$GPU_AVAILABLE" = false ]; then
-        log INFO "Entraînement sur CPU uniquement"
+        log INFO "Training on CPU only"
     fi
 }
 
@@ -360,11 +367,11 @@ run_python() {
     local force_cpu=false
     if [[ "$script" =~ (RNN_Trainer|CRNN_Trainer|Attention_CRNN_Trainer) ]]; then
         force_cpu=true
-        log INFO "⚠️  Modèle LSTM - CPU uniquement (limitation ROCm MIOpen)"
+        log INFO "LSTM model - CPU only (ROCm MIOpen limitation)"
     fi
     
     if [ "$GPU_AVAILABLE" = true ] && [ "$force_cpu" = false ]; then
-        log INFO "Exécution avec GPU: $script"
+        log INFO "Running with GPU: $script"
         "$PODMAN_BIN" run --rm \
             --device=/dev/kfd \
             --device=/dev/dri \
@@ -374,10 +381,11 @@ run_python() {
             -v "$PROJECT_DIR:/workspace:rw" \
             -w "/workspace" \
             -e HSA_OVERRIDE_GFX_VERSION="$GFX_VERSION" \
+            -e PYTHONUNBUFFERED=1 \
             "$ROCM_IMAGE" \
-            python3 "/workspace/$script" $args
+            python3 -u "/workspace/$script" $args
     else
-        "$VENV_PATH" "$script" $args
+        PYTHONUNBUFFERED=1 "$VENV_PATH" -u "$script" $args
     fi
 }
 
@@ -385,7 +393,7 @@ run_python() {
 print_header() {
     echo -e "${MAGENTA}"
     echo "================================================================================"
-    echo "  🚀 ACOUSTIC UAV DETECTION - FULL PIPELINE V3.0"
+    echo "  ACOUSTIC UAV DETECTION - FULL PIPELINE V3.0"
     echo "================================================================================"
     echo -e "${NC}"
     log INFO "Timestamp: $TIMESTAMP"
@@ -723,7 +731,7 @@ calculate_performance() {
                 --model "$model" \
                 --split "$split" \
                 --workers "$WORKERS" 2>&1 | \
-                grep --line-buffered -E "(Dataset|Test en cours|Loaded calibrated|Accuracy|Résultats sauvegardés)" | \
+                grep --line-buffered -E "(Dataset|Running test|Loaded calibrated|Accuracy|Results saved)" | \
                 grep --line-buffered -v "cuda\|CUDA\|GPU" > /dev/null; then
                 log SUCCESS "  ✓ $model $split"
             else
@@ -741,14 +749,53 @@ calculate_performance() {
     fi
 }
 
-# Step 6: Visualizations (Enhanced Pipeline)
+# Step 6: TFLite conversion and validation
+run_tflite_conversion() {
+    if [ "$SKIP_TFLITE_CONVERSION" = true ]; then
+        log STEP "Skipping TFLite conversion (--skip-tflite-conversion)"
+        return
+    fi
+
+    # Also respect the Python-side flag (config.TFLITE_ENABLED)
+    TFLITE_ENABLED=$(PYTHONUNBUFFERED=1 "$VENV_PATH" -c \
+        "import sys; sys.path.insert(0,'$PROJECT_DIR'); import config; print(str(getattr(config,'TFLITE_ENABLED',True)).lower())" \
+        2>/dev/null || echo "true")
+    if [ "$TFLITE_ENABLED" = "false" ]; then
+        log STEP "Skipping TFLite conversion (config.TFLITE_ENABLED=False)"
+        return
+    fi
+
+    log STEP "STEP 6/7: TFLite Conversion and Validation"
+
+    local orchestrator="$PROJECT_DIR/5 - TFLite Conversion/tflite_conv_orchestrator.py"
+    if [ ! -f "$orchestrator" ]; then
+        log ERROR "Orchestrator not found: $orchestrator"
+        return 1
+    fi
+
+    # Convert comma-separated MODELS list to space-separated for Python
+    local model_args
+    model_args=$(echo "$MODELS" | tr ',' ' ')
+
+    log INFO "Converting models: $model_args"
+    if ! PYTHONUNBUFFERED=1 "$VENV_PATH" -u "$orchestrator" \
+            --models $model_args \
+            --split test \
+            --force 2>&1 | grep --line-buffered -v "cuda\|CUDA\|GPU"; then
+        log WARN "TFLite conversion completed with warnings (non-fatal)"
+    else
+        log SUCCESS "TFLite conversion and validation complete"
+    fi
+}
+
+# Step 7: Visualizations (Enhanced Pipeline)
 generate_visualizations() {
     if [ "$SKIP_VIZ" = true ]; then
         log STEP "Skipping visualizations (--skip-viz)"
         return
     fi
     
-    log STEP "STEP 6/6: Generating Visualizations"
+    log STEP "STEP 7/7: Generating Visualizations"
     
     local viz_script="$PROJECT_DIR/6 - Visualization/run_visualizations.py"
     
@@ -821,6 +868,7 @@ main() {
     train_models
     calibrate_thresholds
     calculate_performance
+    run_tflite_conversion
     generate_visualizations
     
     local end_time=$(date +%s)

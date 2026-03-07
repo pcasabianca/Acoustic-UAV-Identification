@@ -1,294 +1,222 @@
-#!/bin/bash
+#!/usr/bin/env bash
 ################################################################################
-# Drone Detection System - Unified Launcher
-# 
-# Démarre le système complet de détection de drones :
-# - Enregistrement audio depuis le microphone (optionnel)
-# - Détection en temps réel
-#
-# Usage:
-#   ./start_detection.sh                  # Détection seule (fichiers audio manuels)
-#   ./start_detection.sh --with-recording # Avec enregistrement automatique
-#   ./start_detection.sh --test FILE.wav  # Test avec un fichier
+# start_detection.sh
+# Modern launcher for Drone Detection System
+# - Activates / uses the `drone` conda env if available
+# - Validates dependencies and model files
+# - Provides simple CLI to run detection, recording, tests and device listing
 ################################################################################
 
-set -e
+set -euo pipefail
 
-# Colors
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# Colors (fall back if not a terminal)
+GREEN='\033[0;32m' || true
+YELLOW='\033[1;33m' || true
+RED='\033[0;31m' || true
+BLUE='\033[0;34m' || true
+NC='\033[0m' || true
 
-# Detect script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Function to check if command exists
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
+command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+usage() {
+    cat <<EOF
+Usage: $0 [OPTIONS]
+
+Options:
+  --with-recording      Start continuous detection with automatic recording
+  --laptop              Force laptop recording backend (PyAudio)
+  --once                Run a single record->feature->predict cycle and exit
+  --test FILE.wav       Run detection on a single WAV file and exit
+  --list-devices        List audio devices (PyAudio)
+  --save-to-disk        Allow saving recordings to disk (default: RAM-only)
+  --help                Show this help
+
+Examples:
+  $0 --with-recording           # Continuous monitoring with RAM-only recording
+  $0 --with-recording --laptop  # Force PyAudio backend
+  $0 --once                    # Run once and exit (convenient for cron)
+  $0 --test recordings/sample.wav
+
+EOF
 }
 
-# Function to propose setup
-propose_setup() {
-    echo ""
-    echo -e "${YELLOW}═══════════════════════════════════════════════════════${NC}"
-    echo -e "${YELLOW}  ENVIRONNEMENT NON CONFIGURÉ${NC}"
-    echo -e "${YELLOW}═══════════════════════════════════════════════════════${NC}"
-    echo ""
-    echo "Le système détecte que l'environnement n'est pas correctement configuré."
-    echo ""
-    echo "Voulez-vous lancer l'installation automatique ?"
-    echo -e "  ${GREEN}./setup_deployment.sh${NC}"
-    echo ""
-    echo -n "Lancer setup maintenant ? (y/n) "
-    read -r response
-    
-    if [[ "$response" =~ ^[Yy]$ ]]; then
-        echo ""
-        chmod +x setup_deployment.sh
-        ./setup_deployment.sh
-        echo ""
-        echo -e "${GREEN}Setup terminé ! Relancez ce script.${NC}"
-        exit 0
-    else
-        echo ""
-        echo -e "${RED}Installation annulée. Configurez l'environnement manuellement.${NC}"
-        exit 1
-    fi
-}
-
-# Try to activate conda environment
+# Evaluate Conda environment (prefer activation but fallback to `conda run`)
+USE_CONDA_RUN=false
 if command_exists conda; then
-    # Source conda
-    CONDA_BASE=$(conda info --base 2>/dev/null)
+    CONDA_BASE=$(conda info --base 2>/dev/null || true)
     if [ -n "$CONDA_BASE" ]; then
-        source "$CONDA_BASE/etc/profile.d/conda.sh"
-        
-        # Activate drone environment if exists
-        if conda env list | grep -q "^drone "; then
-            conda activate drone
-            echo -e "${GREEN}✓${NC} Conda environment 'drone' activated"
+        # shellcheck disable=SC1090
+        source "$CONDA_BASE/etc/profile.d/conda.sh" || true
+        if conda env list | grep -Eq '^[[:space:]]*drone[[:space:]]'; then
+            if [ "${CONDA_DEFAULT_ENV:-}" != "drone" ]; then
+                if ! conda activate drone 2>/dev/null; then
+                    USE_CONDA_RUN=true
+                fi
+            fi
         fi
     fi
 fi
 
-# Trap to cleanup on exit
-cleanup() {
-    echo ""
-    echo -e "${YELLOW}Arrêt du système...${NC}"
-    
-    # Kill background processes
-    if [ ! -z "$RECORDER_PID" ]; then
-        kill $RECORDER_PID 2>/dev/null || true
-        echo -e "${GREEN}✓${NC} Enregistreur arrêté"
-    fi
-    
-    if [ ! -z "$DETECTOR_PID" ]; then
-        kill $DETECTOR_PID 2>/dev/null || true
-        echo -e "${GREEN}✓${NC} Détecteur arrêté"
-    fi
-    
-    echo -e "${GREEN}Système arrêté proprement${NC}"
-    exit 0
+# Build python command
+if [ "$USE_CONDA_RUN" = true ]; then
+    PYTHON_CMD=(conda run -n drone python)
+elif command_exists python3; then
+    PYTHON_CMD=(python3)
+else
+    PYTHON_CMD=(python)
+fi
+
+# Quick function to run python inline
+py() { "${PYTHON_CMD[@]}" - <<PY
+$1
+PY
 }
 
-trap cleanup SIGINT SIGTERM
+# dependency checks
+echo -e "${BLUE}[1/3]${NC} Validating runtime and dependencies..."
+MISSING=()
+if ! "${PYTHON_CMD[@]}" -c "import tensorflow" 2>/dev/null; then MISSING+=(tensorflow); fi
+if ! "${PYTHON_CMD[@]}" -c "import librosa" 2>/dev/null; then MISSING+=(librosa); fi
+if ! "${PYTHON_CMD[@]}" -c "import numpy" 2>/dev/null; then MISSING+=(numpy); fi
+if ! "${PYTHON_CMD[@]}" -c "import soundfile" 2>/dev/null; then MISSING+=(soundfile); fi
 
-# Header
-echo "========================================================================"
-echo "  🚁 SYSTÈME DE DÉTECTION DE DRONES"
-echo "========================================================================"
-echo ""
-
-# Check Python
-echo -e "${BLUE}[1/4]${NC} Vérification de Python..."
-if ! command_exists python && ! command_exists python3; then
-    echo -e "${RED}✗ Python n'est pas installé!${NC}"
-    propose_setup
+if [ ${#MISSING[@]} -gt 0 ]; then
+    echo -e "${RED}Missing Python packages:${NC} ${MISSING[*]}"
+    echo "Install into the chosen interpreter, for example:"
+    echo "  ${PYTHON_CMD[*]} -m pip install librosa numpy soundfile"
+    echo "Or create the conda env from environment.yml"
+    exit 1
 fi
-
-# Use python3 or python
-PYTHON_CMD=$(command_exists python3 && echo "python3" || echo "python")
-echo -e "${GREEN}✓${NC} Python OK ($($PYTHON_CMD --version))"
-
-# Check dependencies
-echo -e "${BLUE}[2/4]${NC} Vérification des dépendances..."
-
-MISSING_DEPS=()
-
-$PYTHON_CMD -c "import tensorflow" 2>/dev/null || MISSING_DEPS+=("tensorflow")
-$PYTHON_CMD -c "import librosa" 2>/dev/null || MISSING_DEPS+=("librosa")
-$PYTHON_CMD -c "import numpy" 2>/dev/null || MISSING_DEPS+=("numpy")
-$PYTHON_CMD -c "import soundfile" 2>/dev/null || MISSING_DEPS+=("soundfile")
-
-if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
-    echo -e "${RED}✗ Dépendances manquantes: ${MISSING_DEPS[@]}${NC}"
-    propose_setup
-fi
-
-echo -e "${GREEN}✓${NC} Toutes les dépendances sont installées"
 
 # Check models
-echo -e "${BLUE}[3/4]${NC} Vérification des modèles..."
-
-if [ ! -d "models" ] || [ -z "$(ls -A models/*.keras 2>/dev/null)" ]; then
-    echo -e "${RED}✗ Aucun modèle trouvé dans models/${NC}"
-    echo ""
-    echo "Les modèles doivent être présents dans le dossier 'models/'"
-    echo "Si vous transférez ce dossier depuis la machine d'entraînement,"
-    echo "assurez-vous d'inclure le dossier 'models/' avec les fichiers .keras"
+echo -e "${BLUE}[2/3]${NC} Checking models/"
+if [ ! -d "models" ] || [ -z "$(ls -A models 2>/dev/null)" ]; then
+    echo -e "${RED}No models found in models/ directory${NC}"
+    echo "Place your .keras model files in the models/ directory."
     exit 1
 fi
-
-MODEL_COUNT=$(ls -1 models/*.keras 2>/dev/null | wc -l)
-echo -e "${GREEN}✓${NC} $MODEL_COUNT modèle(s) trouvé(s)"
 
 # Check config
-echo -e "${BLUE}[4/4]${NC} Vérification de la configuration..."
-
+echo -e "${BLUE}[3/3]${NC} Checking deployment_config.json"
 if [ ! -f "deployment_config.json" ]; then
-    echo -e "${RED}[ERROR]${NC} Fichier deployment_config.json manquant!"
-    exit 1
+    echo -e "${RED}Missing deployment_config.json${NC}"; exit 1
+fi
+if ! "${PYTHON_CMD[@]}" -c "import json,sys; json.load(open('deployment_config.json'))" 2>/dev/null; then
+    echo -e "${RED}Invalid JSON in deployment_config.json${NC}"; exit 1
 fi
 
-# Validate JSON
-if ! python3 -c "import json; json.load(open('deployment_config.json'))" 2>/dev/null; then
-    echo -e "${RED}[ERROR]${NC} deployment_config.json invalide!"
-    exit 1
-fi
-
-echo -e "${GREEN}✓${NC} Configuration valide"
-
-# Create directories
 mkdir -p audio_input logs
 
-# Parse arguments
-MODE="detection_only"
-TEST_FILE=""
+# Parse args
+MODE='detection'
+FORCE_LAPTOP=false
+TEST_FILE=''
+ONCE=false
+SAVE_TO_DISK=false
 
 while [[ $# -gt 0 ]]; do
-    case $1 in
-        --with-recording)
-            MODE="with_recording"
-            shift
-            ;;
-        --test)
-            MODE="test"
-            TEST_FILE="$2"
-            shift 2
-            ;;
-        --list-devices)
-            python3 audio_recorder.py --list-devices
-            exit 0
-            ;;
-        --help)
-            echo "Usage: $0 [OPTIONS]"
-            echo ""
-            echo "Options:"
-            echo "  --with-recording      Démarrer avec enregistrement audio automatique"
-            echo "  --test FILE.wav       Tester avec un fichier audio spécifique"
-            echo "  --list-devices        Lister les périphériques audio disponibles"
-            echo "  --help                Afficher cette aide"
-            echo ""
-            echo "Exemples:"
-            echo "  $0                              # Détection seule"
-            echo "  $0 --with-recording             # Avec enregistrement"
-            echo "  $0 --test ../dataset/drone.wav  # Test unitaire"
-            exit 0
-            ;;
-        *)
-            echo -e "${RED}[ERROR]${NC} Option inconnue: $1"
-            echo "Utilisez --help pour voir les options disponibles"
-            exit 1
-            ;;
+    case "$1" in
+        --with-recording) MODE='with_recording'; shift ;;
+        --laptop) FORCE_LAPTOP=true; shift ;;
+        --test) TEST_FILE="$2"; MODE='test'; shift 2 ;;
+        --list-devices) MODE='list_devices'; shift ;;
+        --once) ONCE=true; shift ;;
+        --save-to-disk) SAVE_TO_DISK=true; shift ;;
+        --help) usage; exit 0 ;;
+        *) echo "Unknown option: $1"; usage; exit 1 ;;
     esac
 done
 
-# Launch based on mode
-echo -e "${BLUE}[4/4]${NC} Démarrage du système..."
-echo ""
+cleanup() {
+    echo -e "\n${YELLOW}Shutting down...${NC}"
+    if [ -n "${DETECTOR_PID:-}" ]; then kill "$DETECTOR_PID" 2>/dev/null || true; fi
+    exit 0
+}
+trap cleanup INT TERM
 
-case $MODE in
+run_detector() {
+    ARGS=(drone_detector.py)
+    if [ "$MODE" = "with_recording" ]; then
+        ARGS+=(--continuous --with-recording)
+    elif [ "$MODE" = "detection" ]; then
+        ARGS+=(--continuous)
+    fi
+    if [ "$FORCE_LAPTOP" = true ]; then ARGS+=(--laptop); fi
+    if [ "$SAVE_TO_DISK" = true ]; then ARGS+=(--save-to-disk); fi
+
+    if [ "$ONCE" = true ]; then
+        # run a single cycle
+        ARGS=(drone_detector.py --once)
+    fi
+
+    echo -e "${GREEN}Running:${NC} ${PYTHON_CMD[*]} ${ARGS[*]}"
+    "${PYTHON_CMD[@]}" "${ARGS[@]}"
+}
+
+case "$MODE" in
+    list_devices)
+        echo "Listing audio devices via LaptopRecorder (if available)..."
+        "${PYTHON_CMD[@]}" - <<PY
+try:
+    from utils.laptop_recorder import LaptopRecorder
+    lr = LaptopRecorder()
+    if hasattr(lr, 'list_devices'):
+        lr.list_devices()
+    else:
+        print('No device-listing available')
+except Exception as e:
+    print('Error listing devices:', e)
+PY
+        ;;
+
     test)
-        # Test mode
-        if [ ! -f "$TEST_FILE" ]; then
-            echo -e "${RED}[ERROR]${NC} Fichier non trouvé: $TEST_FILE"
-            exit 1
-        fi
-        
-        echo "========================================================================"
-        echo "  MODE TEST - Analyse d'un fichier unique"
-        echo "========================================================================"
-        echo ""
-        
-        python3 drone_detector.py --file "$TEST_FILE"
+        if [ -z "$TEST_FILE" ]; then echo "Missing test file"; usage; exit 1; fi
+        if [ ! -f "$TEST_FILE" ]; then echo "Test file not found: $TEST_FILE"; exit 1; fi
+        echo "Running single-file test: $TEST_FILE"
+        "${PYTHON_CMD[@]}" drone_detector.py --file "$TEST_FILE"
         ;;
-        
-    with_recording)
-        # Recording + Detection mode
-        echo "========================================================================"
-        echo "  MODE ENREGISTREMENT + DÉTECTION"
-        echo "========================================================================"
-        echo ""
-        
-        # Check PyAudio
-        if ! python3 -c "import pyaudio" 2>/dev/null; then
-            echo -e "${YELLOW}[WARN]${NC} PyAudio non installé, enregistrement impossible"
-            echo ""
-            echo "Installation:"
-            echo "  pip3 install pyaudio"
-            echo "  Sur Raspberry Pi: sudo apt-get install python3-pyaudio"
-            echo ""
-            echo "Basculement en mode détection seule..."
-            MODE="detection_only"
-        else
-            echo -e "${GREEN}[Démarrage]${NC} Enregistreur audio..."
-            python3 audio_recorder.py --interval 5 --duration 4 > logs/recorder.log 2>&1 &
-            RECORDER_PID=$!
-            
-            echo -e "${GREEN}✓${NC} Enregistreur démarré (PID: $RECORDER_PID)"
-            echo ""
-            sleep 2
-        fi
-        
+
+    with_recording|detection)
         if [ "$MODE" = "with_recording" ]; then
-            echo -e "${GREEN}[Démarrage]${NC} Détecteur de drones..."
-            python3 drone_detector.py --continuous &
-            DETECTOR_PID=$!
-            
-            echo -e "${GREEN}✓${NC} Détecteur démarré (PID: $DETECTOR_PID)"
-            echo ""
-            echo "Appuyez sur Ctrl+C pour arrêter"
-            echo ""
-            
-            # Wait for processes (will be interrupted by cleanup)
-            wait
+            # If laptop forced, ensure pyaudio exists
+            if [ "$FORCE_LAPTOP" = true ]; then
+                if ! "${PYTHON_CMD[@]}" -c "import pyaudio" 2>/dev/null; then
+                    echo -e "${YELLOW}PyAudio not available in interpreter; falling back to detection-only${NC}"
+                    MODE='detection'
+                fi
+            fi
+            echo "Starting detector (mode=$MODE)"
+        else
+            echo "Starting detector (mode=detection-only)"
         fi
-        ;;
-        
-    detection_only)
-        # Detection only mode
-        echo "========================================================================"
-        echo "  MODE DÉTECTION SEULE"
-        echo "========================================================================"
-        echo ""
-        echo "Le système surveille le dossier: audio_input/"
-        echo ""
-        echo "Pour ajouter des fichiers audio à analyser:"
-        echo "  1. Copier des fichiers WAV (4s, 22050Hz, mono) dans audio_input/"
-        echo "  2. Le système les analysera automatiquement toutes les 5 secondes"
-        echo ""
-        echo "Appuyez sur Ctrl+C pour arrêter"
-        echo ""
-        
-        python3 drone_detector.py --continuous &
+
+        if [ "$ONCE" = true ]; then
+            # single cycle and exit
+            ARGS=(drone_detector.py --once)
+            if [ "$MODE" = "with_recording" ]; then ARGS+=(--with-recording); fi
+            if [ "$FORCE_LAPTOP" = true ]; then ARGS+=(--laptop); fi
+            if [ "$SAVE_TO_DISK" = true ]; then ARGS+=(--save-to-disk); fi
+            echo "${PYTHON_CMD[*]} ${ARGS[*]}"
+            "${PYTHON_CMD[@]}" "${ARGS[@]}"
+            exit 0
+        fi
+
+        # Continuous run
+        ARGS=(drone_detector.py)
+        if [ "$MODE" = "with_recording" ]; then ARGS+=(--continuous --with-recording); else ARGS+=(--continuous); fi
+        if [ "$FORCE_LAPTOP" = true ]; then ARGS+=(--laptop); fi
+        if [ "$SAVE_TO_DISK" = true ]; then ARGS+=(--save-to-disk); fi
+
+        "${PYTHON_CMD[@]}" "${ARGS[@]}" &
         DETECTOR_PID=$!
-        
-        # Wait for process (will be interrupted by cleanup)
-        wait
+        echo "Detector started (PID: $DETECTOR_PID)"
+        wait $DETECTOR_PID
         ;;
+    *)
+        usage; exit 1 ;;
 esac
 
-# Note: cleanup function is called automatically via trap on exit
+# end

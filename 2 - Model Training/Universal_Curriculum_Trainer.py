@@ -14,6 +14,7 @@ Usage:
   python Universal_Curriculum_Trainer.py --model cnn --curriculum_strategy linear
   python Universal_Curriculum_Trainer.py --model efficientnet --curriculum_strategy step --batch_size 16
 """
+import gc
 import json
 import numpy as np
 import argparse
@@ -61,6 +62,7 @@ TRAIN_DATA_PATH = config.MEL_TRAIN_DATA_PATH_STR
 VAL_DATA_PATH = config.MEL_VAL_DATA_PATH_STR
 
 # Default hyperparams
+_MODEL_BATCH_SIZES = getattr(config, 'MODEL_BATCH_SIZES', {})
 BATCH_SIZE = getattr(config, 'BATCH_SIZE', 8)
 LEARNING_RATE = getattr(config, 'LEARNING_RATE', 0.0001)
 
@@ -116,6 +118,7 @@ class CurriculumScheduler(keras.callbacks.Callback):
                 # sort these indices by difficulty_scores
                 sorted_local = idxs[np.argsort(difficulty_scores[idxs])]
                 self.classwise_sorted[c] = list(sorted_local)
+        
         
     def on_epoch_begin(self, epoch, logs=None):
         """Compute the subset of samples to use for this epoch."""
@@ -261,6 +264,61 @@ def prepare_datasets_curriculum(curriculum_strategy: str = 'linear'):
     val_mels = val_mels[..., np.newaxis]
     
     return train_mels, train_labels, train_difficulty, val_mels, val_labels
+
+
+def make_numpy_batch_dataset(
+    X: np.ndarray,
+    y: np.ndarray,
+    indices: np.ndarray,
+    batch_size: int,
+    epoch: Optional[int],
+    shuffle: bool = True,
+) -> tf.data.Dataset:
+    """
+    Build a tf.data.Dataset that yields (X_batch, y_batch) numpy arrays
+    via a Python generator.
+
+    This is the memory-safe alternative to from_tensor_slices(): no constant
+    tensor is ever staged on the GPU – data lives in host RAM and each batch
+    is copied to the GPU only at the moment it is consumed by the training
+    step.  Critical for large-model / growing-curriculum scenarios where the
+    full epoch subset would trigger an _EagerConst OOM on constrained VRAM.
+
+    epoch=None → truly random shuffle each time the generator is iterated
+    (used when caching a stable dataset across multiple epochs).
+    """
+    # Snapshot indices once per epoch (avoids closure-capture issues)
+    epoch_indices = indices.copy()
+    epoch_bs = batch_size
+    epoch_seed = epoch  # None = random each iteration
+
+    sample_x = X[0:1]  # single sample for output_signature
+
+    def _generator():
+        if epoch_seed is None:
+            rng = np.random.default_rng()  # new random state each generator call
+        else:
+            rng = np.random.default_rng(epoch_seed)
+        perm = rng.permutation(len(epoch_indices))
+        shuffled = epoch_indices[perm] if shuffle else epoch_indices
+        for start in range(0, len(shuffled), epoch_bs):
+            batch_idx = shuffled[start : start + epoch_bs]
+            yield X[batch_idx].astype(np.float32), y[batch_idx].astype(np.float32)
+
+    # .repeat() makes the dataset cycle indefinitely so that Keras never sees
+    # an OutOfRange signal mid-epoch and does not emit the "Your input ran out
+    # of data" UserWarning.  The epoch boundary is controlled entirely by
+    # steps_per_epoch / validation_steps passed to model.fit().
+    # For shuffle=True + epoch=None, each new cycle through the data calls
+    # _generator() fresh (TF invokes the factory again on repeat), so every
+    # epoch gets a truly different random permutation.
+    return tf.data.Dataset.from_generator(
+        _generator,
+        output_signature=(
+            tf.TensorSpec(shape=(None,) + sample_x.shape[1:], dtype=tf.float32),
+            tf.TensorSpec(shape=(None,),                       dtype=tf.float32),
+        ),
+    ).repeat().prefetch(2)  # Fixed buffer: AUTOTUNE can prefetch many large Conformer batches into VRAM
 
 
 def get_model_builder(model_type: str):
@@ -444,6 +502,12 @@ def main():
     parser.add_argument('--max_epochs', type=int, default=config.MAX_EPOCHS,
                        help='Maximum epochs to train')
     
+    # Mixed precision (memory optimisation for large models such as AST)
+    parser.add_argument('--mixed_precision', action='store_true',
+                       help='Force mixed bfloat16 precision (halves activation memory)')
+    parser.add_argument('--no_mixed_precision', action='store_true',
+                       help='Disable the automatic mixed-precision that is applied for AST')
+
     # Other options
     parser.add_argument('--use_class_weight', action='store_true',
                        help='Use balanced class weights')
@@ -451,15 +515,29 @@ def main():
                        help='Verbosity: 0=silent, 1=per-batch, 2=per-epoch')
     
     args = parser.parse_args()
-    
+
+    # Apply per-model batch size override when the user did not explicitly pass
+    # --batch_size (i.e. the value still equals the global default).
+    # Transformer models (AST, Conformer) have O(T²) attention and need a
+    # smaller batch to stay within VRAM bounds.
+    if args.batch_size == BATCH_SIZE and args.model in _MODEL_BATCH_SIZES:
+        args.batch_size = _MODEL_BATCH_SIZES[args.model]
+
     print(colored("\n" + "="*80, "magenta"))
     print(colored("  UNIVERSAL CURRICULUM LEARNING TRAINER", "magenta"))
     print(colored("="*80 + "\n", "magenta"))
-    
+
     print(colored(f"[CONFIG] Model: {args.model}", "cyan"))
     print(colored(f"[CONFIG] Curriculum strategy: {args.curriculum_strategy}", "cyan"))
     print(colored(f"[CONFIG] Loss function: {args.loss}", "cyan"))
     print(colored(f"[CONFIG] Batch size: {args.batch_size}", "cyan"))
+
+    # Mixed precision: auto-enable bfloat16 for AST (transformer attention is memory-hungry).
+    # bfloat16 is preferred over float16 on ROCm/AMD because it does not need loss scaling.
+    _auto_mp = args.model == 'ast' and not args.no_mixed_precision
+    if args.mixed_precision or _auto_mp:
+        keras.mixed_precision.set_global_policy('mixed_bfloat16')
+        print(colored("[CONFIG] Mixed precision: mixed_bfloat16 (auto for AST)", "cyan"))
     print()
     
     # Load data with difficulty scores
@@ -489,12 +567,23 @@ def main():
     
     # Compile model
     optimizer = keras.optimizers.Adam(learning_rate=args.learning_rate)
-    
+
     # Use simple metrics that work for both binary and categorical
     # (Precision/Recall/AUC from get_metrics() are binary-only and cause dimension issues)
     metrics_list = ['accuracy']
-    
-    model.compile(optimizer=optimizer, loss=loss_fn, metrics=metrics_list)
+
+    # steps_per_execution=1 prevents Keras from wrapping multiple gradient steps
+    # inside a single tf.while_loop, which causes TF to pre-allocate activations
+    # for the entire loop body (scales with steps-per-epoch) and triggers OOM on
+    # transformer models like AST.  jit_compile=False additionally disables the
+    # XLA worst-case buffer reservation that compounds the problem on ROCm.
+    model.compile(
+        optimizer=optimizer,
+        loss=loss_fn,
+        metrics=metrics_list,
+        steps_per_execution=1,
+        jit_compile=False,
+    )
     
     # Compute class weights if requested
     class_weight = None
@@ -575,79 +664,99 @@ def main():
     
     # Train model with curriculum learning (epoch by epoch)
     print(colored("\n[TRAINING] Starting curriculum learning...\n", "green"))
-    
+
+    # Pre-build a generator-based validation dataset (stays in host RAM, no EagerConst)
+    val_ds = make_numpy_batch_dataset(
+        X_val, y_val,
+        indices=np.arange(len(y_val), dtype=np.int32),
+        batch_size=args.batch_size,
+        epoch=0,
+        shuffle=False,
+    )
+    # Tell Keras exactly how many val steps there are so it doesn't misread
+    # an end-of-generator as "ran out of data early".
+    val_steps = int(np.ceil(len(y_val) / args.batch_size))
+
     # Initialize empty history - will dynamically capture all metrics from callbacks
     all_history = {}
-    
+
     if curriculum_scheduler is not None:
         # Curriculum: train epoch by epoch with increasing difficulty
         print(colored(f"\n[CURRICULUM] Training for {args.max_epochs} epochs (min {args.min_epochs} before early stopping)\n", "cyan"))
-        
+
         for epoch in range(args.max_epochs):
-            # Compute curriculum indices for this epoch
+            # Update curriculum indices for this epoch
             curriculum_scheduler.on_epoch_begin(epoch, None)
             curr_indices = curriculum_scheduler.current_indices
-            
-            # Filter training data
-            X_train_curr = X_train[curr_indices]
-            y_train_curr = y_train[curr_indices]
-            
-            # Calculer stats de difficulté
+
             avg_diff = np.mean(difficulty_train[curr_indices]) if difficulty_train is not None else 0
             max_diff = np.max(difficulty_train[curr_indices]) if difficulty_train is not None else 0
-            
-            # Header unifié avec info warmup si applicable
+
             print(colored(f"{'='*80}", "cyan"))
             if epoch < args.min_epochs:
                 print(colored(f"EPOCH {epoch + 1}/{args.max_epochs} (Warmup {epoch + 1}/{args.min_epochs})", "cyan", attrs=['bold']))
             else:
                 print(colored(f"EPOCH {epoch + 1}/{args.max_epochs}", "cyan", attrs=['bold']))
-            
             print(colored(f"Samples: {len(curr_indices)}/{len(X_train)} ({100*len(curr_indices)/len(X_train):.1f}%) | ", "cyan") +
                   colored(f"Avg difficulty: {avg_diff:.3f} | Max: {max_diff:.3f}", "yellow"))
             print(colored(f"{'='*80}", "cyan"))
-            
-            # Train for 1 epoch (verbose=0 pour éviter les messages Keras confus)
+
+            # Pass numpy slices directly — Keras traces train_function once on
+            # the first call and reuses the same trace every epoch (input shape
+            # and dtype don't change).  No new CapturedFunction is registered,
+            # so memory stays flat across all 250 epochs.
+            # (contrast with from_generator, which registers a new CapturedFunction
+            # per call and causes the observed OOM at epoch ~26)
+            X_curr = X_train[curr_indices]
+            y_curr = y_train[curr_indices]
+
             epoch_start = datetime.now()
             history = model.fit(
-                X_train_curr, y_train_curr,
-                validation_data=(X_val, y_val),
+                X_curr, y_curr,
                 batch_size=args.batch_size,
+                shuffle=True,
+                validation_data=(X_val, y_val),
                 epochs=1,
                 callbacks=callbacks_list,
                 class_weight=class_weight,
-                verbose=0  # On gère nous-mêmes l'affichage
+                verbose=0,
             )
             epoch_duration = datetime.now() - epoch_start
-            
-            # Accumulate ALL metrics dynamically (captures callbacks metrics like TP/TN/FP/FN)
+
             for key, values in history.history.items():
                 if key not in all_history:
                     all_history[key] = []
                 all_history[key].extend(values)
-            
-            # Afficher métriques sur une ligne
-            loss = history.history.get('loss', [0])[0]
-            acc = history.history.get('accuracy', [0])[0]
+
+            loss    = history.history.get('loss', [0])[0]
+            acc     = history.history.get('accuracy', [0])[0]
             val_loss = history.history.get('val_loss', [0])[0]
-            val_acc = history.history.get('val_accuracy', [0])[0]
+            val_acc  = history.history.get('val_accuracy', [0])[0]
             print(colored(f"loss: {loss:.4f} - accuracy: {acc:.4f} - val_loss: {val_loss:.4f} - val_accuracy: {val_acc:.4f} | Duration: {epoch_duration}", "white"))
-            
-            # Le callback early stopping affichera son propre message ici
-            
             print(colored(f"{'='*80}\n", "cyan"))
-            
-            # Check si early stopping a demandé l'arrêt
+
+            del history, X_curr, y_curr
+            gc.collect()
+
             if model.stop_training:
                 print(colored(f"[INFO] Training stopped at epoch {epoch + 1}/{args.max_epochs}\n", "yellow", attrs=['bold']))
                 break
     else:
         # Standard training (no curriculum)
-        history = model.fit(
-            X_train, y_train,
-            validation_data=(X_val, y_val),
+        all_train_idx = np.arange(len(y_train), dtype=np.int32)
+        train_ds_full = make_numpy_batch_dataset(
+            X_train, y_train, all_train_idx,
             batch_size=args.batch_size,
+            epoch=None,   # random shuffle each epoch cycle (epoch=None → fresh rng)
+            shuffle=True,
+        )  # .repeat() is already added inside make_numpy_batch_dataset
+        train_steps_full = int(np.ceil(len(y_train) / args.batch_size))
+        history = model.fit(
+            train_ds_full,
+            validation_data=val_ds,
             epochs=args.max_epochs,
+            steps_per_epoch=train_steps_full,
+            validation_steps=val_steps,
             callbacks=callbacks_list,
             class_weight=class_weight,
             verbose=args.verbose

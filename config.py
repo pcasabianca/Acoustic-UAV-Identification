@@ -153,6 +153,25 @@ PERFORMANCE_DIR.mkdir(exist_ok=True)
 VIZ_OUTPUT_DIR = PROJECT_ROOT / "6 - Visualization" / "outputs"
 VIZ_OUTPUT_DIR.mkdir(exist_ok=True)
 
+# TFLite conversion
+# Set TFLITE_ENABLED=True to generate .tflite models after training.
+# TFLITE_QUANTIZATION: "none" (float32), "float16" (recommended for Raspberry Pi).
+TFLITE_ENABLED: bool = True
+TFLITE_QUANTIZATION: str = "float16"   # "none" | "float16"
+# Per-model overrides (uppercase model name → quantization mode).
+# ATTENTION_CRNN: float16 degrades BiLSTM state accumulation (~11% delta without override).
+# CONFORMER/AST: saved with mixed_bfloat16 policy → internal bfloat16 ops survive into TFLite
+#   causing CAST op version mismatches and ~9% delta. Forcing float32 load policy fixes this.
+TFLITE_QUANTIZATION_OVERRIDES: dict = {
+    'ATTENTION_CRNN': 'none',
+    'CONFORMER':      'none',
+    'AST':            'none',
+}
+TFLITE_DIR = MODELS_DIR   # .tflite files sit alongside .keras files
+TFLITE_DIR.mkdir(exist_ok=True)
+TFLITE_COMPARISON_DIR = RESULTS_DIR / "tflite_comparison"
+TFLITE_COMPARISON_DIR.mkdir(exist_ok=True)
+
 CNN_PREDICTIONS_PATH = PREDICTIONS_DIR / "cnn_predictions.json"
 RNN_PREDICTIONS_PATH = PREDICTIONS_DIR / "rnn_predictions.json"
 CRNN_PREDICTIONS_PATH = PREDICTIONS_DIR / "crnn_predictions.json"
@@ -277,7 +296,7 @@ PROP_DOMAIN_DEFAULTS = {
 # training, extraction and inference.
 MFCC_N_MFCC = 20            # number of MFCCs to extract
 MEL_DURATION = float(AUDIO_DURATION_S)        # seconds used per example at training/inference
-MEL_N_MELS = 64           # number of mel bins 64
+MEL_N_MELS = 128           # number of mel bins 64
 MEL_N_FFT = 2048          # FFT window size 2048
 MEL_HOP_LENGTH = 512      # hop length in samples 512
 # Compute number of time frames from sample rate / duration / hop length and segments.
@@ -348,6 +367,14 @@ TARGET_RECALL = 0.95  # Target recall for threshold calibration (fallback when u
 # Batch size for training (used by all trainers when no CLI arg provided)
 # Conservative default to avoid ROCm OOM on constrained VRAM allocations.
 BATCH_SIZE = 16
+
+# Per-model batch size overrides (applied by Universal_Curriculum_Trainer when
+# no --batch_size flag is given).  Transformer-based models (AST, Conformer)
+# have O(T²) attention memory and need a smaller batch to avoid VRAM OOM.
+MODEL_BATCH_SIZES = {
+    'ast':       8,
+    'conformer': 8,
+}
 
 # Learning rate (default for all models)
 LEARNING_RATE = 0.0001

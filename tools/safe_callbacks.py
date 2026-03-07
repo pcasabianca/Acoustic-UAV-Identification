@@ -1,3 +1,4 @@
+import gc
 import time
 import numpy as np
 from tensorflow import keras
@@ -167,29 +168,23 @@ class ConfusionMatrixLogger(keras.callbacks.Callback):
         self.verbose = verbose
         self.predict_batch_size = max(1, int(predict_batch_size))
 
+    def on_train_begin(self, logs=None):
+        """No-op: kept for API compatibility. Numpy-based predict needs no pre-built dataset."""
+        pass
+
     def _predict_safe(self):
-        """Run validation prediction with adaptive batch-size fallback to avoid OOM."""
-        batch_candidates = []
-        current = self.predict_batch_size
-        while current >= 1:
-            batch_candidates.append(current)
-            if current == 1:
-                break
-            current = max(1, current // 2)
-
-        last_error = None
-        for bs in batch_candidates:
-            try:
-                return self.model.predict(self.X_val, batch_size=bs, verbose=0)
-            except Exception as exc:
-                last_error = exc
-                if self.verbose:
-                    print(colored(f"[Confusion] Predict OOM/failure with batch_size={bs}, retrying...", "yellow"))
-
-        if self.verbose:
-            err_msg = str(last_error) if last_error is not None else "unknown error"
-            print(colored(f"[Confusion] Skipped (prediction failed): {err_msg}", "yellow"))
-        return None
+        """Run validation prediction directly on the numpy array — no tf.data, no OutOfRange warning."""
+        try:
+            return self.model.predict(self.X_val, batch_size=self.predict_batch_size, verbose=0)
+        except Exception as exc:
+            if self.verbose:
+                print(colored(f"[Confusion] Predict failure: {exc}, retrying with batch_size=1...", "yellow"))
+        try:
+            return self.model.predict(self.X_val, batch_size=1, verbose=0)
+        except Exception as exc2:
+            if self.verbose:
+                print(colored(f"[Confusion] Skipped (prediction failed): {exc2}", "yellow"))
+            return None
     
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
@@ -212,6 +207,9 @@ class ConfusionMatrixLogger(keras.callbacks.Callback):
                 y_true = np.argmax(self.y_val, axis=1)
             else:
                 y_true = self.y_val.flatten()
+
+        # Release large prediction array immediately after converting to labels
+        del y_pred_proba
         
         # Matrice de confusion
         cm = confusion_matrix(y_true, y_pred)
@@ -250,3 +248,7 @@ class ConfusionMatrixLogger(keras.callbacks.Callback):
             total = np.sum(cm)
             if self.verbose:
                 print(colored(f"[Confusion] Correct={correct}/{total} ({100*correct/total:.1f}%)", "cyan"))
+
+        # Explicitly release arrays to avoid accumulating memory across epochs
+        del cm, y_pred, y_true
+        gc.collect()

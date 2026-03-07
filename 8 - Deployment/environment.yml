@@ -4,10 +4,10 @@ channels:
   - defaults
 dependencies:
   - python=3.11
-  - tensorflow=2.20.0
   - librosa
   - numpy
   - pip
   - pip:
+    - tensorflow==2.16.2
     - soundfile
-    - pyaudio
+    - spidev

@@ -1,64 +1,78 @@
 {
   "version": "2.0",
-  "description": "Deployment thresholds configuration - CALIBRATED from trainers (2026-02-03)",
-  "last_updated": "2026-02-05",
+  "description": "Deployment thresholds configuration - CALIBRATED from models/calibrated_thresholds.json",
+  "last_updated": "2026-03-03",
   "calibration_mode": "balanced_per_class_accuracy_gap_to_target",
   "models": {
     "cnn_model": {
-      "threshold": 0.504,
       "description": "CNN model",
-      "f1_score": 0.629,
-      "accuracy": 0.604,
-      "balanced_accuracy": 0.604
+      "threshold": 0.515,
+      "f1_score": 0.571,
+      "accuracy": 0.564,
+      "balanced_accuracy": 0.564
     },
     "rnn_model": {
-      "threshold": 0.511,
       "description": "RNN model",
-      "f1_score": 0.574,
-      "accuracy": 0.567,
-      "balanced_accuracy": 0.567
+      "threshold": 0.526,
+      "f1_score": 0.54,
+      "accuracy": 0.533,
+      "balanced_accuracy": 0.533
     },
     "crnn_model": {
-      "threshold": 0.496,
       "description": "CRNN model",
-      "f1_score": 0.628,
-      "accuracy": 0.622,
-      "balanced_accuracy": 0.622
+      "threshold": 0.54,
+      "f1_score": 0.601,
+      "accuracy": 0.595,
+      "balanced_accuracy": 0.595
     },
     "attention_crnn_model": {
-      "threshold": 0.508,
       "description": "Attention-CRNN model",
-      "f1_score": 0.634,
-      "accuracy": 0.628,
-      "balanced_accuracy": 0.628
-    },
-    "conformer_model": {
-      "threshold": 0.534,
-      "description": "Conformer model",
-      "f1_score": 0.624,
-      "accuracy": 0.618,
-      "balanced_accuracy": 0.618
-    },
-    "tcn_model": {
-      "threshold": 0.500,
-      "description": "TCN model",
-      "f1_score": 0.658,
-      "accuracy": 0.517,
-      "balanced_accuracy": 0.517
-    },
-    "efficientnet_model": {
-      "threshold": 0.521,
-      "description": "EfficientNet model",
-      "f1_score": 0.623,
-      "accuracy": 0.617,
-      "balanced_accuracy": 0.617
-    },
-    "mobilenet_model": {
-      "threshold": 0.465,
-      "description": "MobileNet model",
+      "threshold": 0.519,
       "f1_score": 0.613,
       "accuracy": 0.607,
       "balanced_accuracy": 0.607
+    },
+    "conformer_model": {
+      "description": "Conformer model",
+      "threshold": 0.871,
+      "f1_score": 0.526,
+      "accuracy": 0.519,
+      "balanced_accuracy": 0.519
+    },
+    "tcn_model": {
+      "description": "TCN model",
+      "threshold": 0.95,
+      "f1_score": 0.536,
+      "accuracy": 0.49,
+      "balanced_accuracy": 0.49
+    },
+    "efficientnet_model": {
+      "description": "EfficientNet model",
+      "threshold": 0.501,
+      "f1_score": 0.62,
+      "accuracy": 0.614,
+      "balanced_accuracy": 0.614
+    },
+    "mobilenet_model": {
+      "description": "MobileNet model",
+      "threshold": 0.513,
+      "f1_score": 0.644,
+      "accuracy": 0.639,
+      "balanced_accuracy": 0.639
+    },
+    "ast_model": {
+      "description": "AST model",
+      "threshold": 0.479,
+      "f1_score": 0.613,
+      "accuracy": 0.607,
+      "balanced_accuracy": 0.607
+    },
+    "multires_model": {
+      "description": "Multi-resolution model",
+      "threshold": 0.551,
+      "f1_score": 0.66,
+      "accuracy": 0.655,
+      "balanced_accuracy": 0.655
     }
   },
   "notes": [

@@ -57,13 +57,10 @@ def feed_forward_module(x, dim, expansion_factor=4, dropout=0.1, training=False,
     # Layer norm
     x = layers.LayerNormalization(name=f'{name_prefix}_ln')(x)
     
-    # Dense with GLU
-    x = layers.Dense(inner_dim * 2, name=f'{name_prefix}_dense1')(x)
-    
-    # GLU activation: split and multiply
-    x_gate = layers.Lambda(lambda x: x[:, :, :inner_dim], name=f'{name_prefix}_gate')(x)
-    x_linear = layers.Lambda(lambda x: x[:, :, inner_dim:], name=f'{name_prefix}_linear')(x)
+    # GLU activation: two separate projections (avoids Lambda, Keras 3 serializable)
+    x_gate = layers.Dense(inner_dim, name=f'{name_prefix}_gate')(x)
     x_gate = layers.Activation('gelu', name=f'{name_prefix}_gelu')(x_gate)
+    x_linear = layers.Dense(inner_dim, name=f'{name_prefix}_linear')(x)
     x = layers.Multiply(name=f'{name_prefix}_glu')([x_gate, x_linear])
     
     x = layers.Dropout(dropout, name=f'{name_prefix}_drop1')(x, training=training)
@@ -78,12 +75,9 @@ def convolution_module(x, dim, kernel_size=31, dropout=0.1, training=False, name
     # Layer norm
     x = layers.LayerNormalization(name=f'{name_prefix}_ln')(x)
     
-    # Pointwise expansion with GLU
-    x = layers.Dense(dim * 2, name=f'{name_prefix}_pw1')(x)
-    
-    # GLU activation
-    x_gate = layers.Lambda(lambda x: x[:, :, :dim], name=f'{name_prefix}_gate')(x)
-    x_linear = layers.Lambda(lambda x: x[:, :, dim:], name=f'{name_prefix}_linear')(x)
+    # Pointwise expansion with GLU: two separate projections (avoids Lambda, Keras 3 serializable)
+    x_gate = layers.Dense(dim, name=f'{name_prefix}_gate')(x)
+    x_linear = layers.Dense(dim, name=f'{name_prefix}_linear')(x)
     x_linear = layers.Activation('sigmoid', name=f'{name_prefix}_sigmoid')(x_linear)
     x = layers.Multiply(name=f'{name_prefix}_glu')([x_gate, x_linear])
     
@@ -105,7 +99,7 @@ def conformer_block(x, dim, num_heads=4, ffn_expansion=4, conv_kernel_size=31, d
     """
     # First half-step FFN (scaled by 0.5)
     ffn1_out = feed_forward_module(x, dim, ffn_expansion, dropout, training, name_prefix=f'block{block_id}_ffn1')
-    ffn1_out = layers.Lambda(lambda x: 0.5 * x, name=f'block{block_id}_ffn1_scale')(ffn1_out)
+    ffn1_out = layers.Rescaling(0.5, name=f'block{block_id}_ffn1_scale')(ffn1_out)
     x = layers.Add(name=f'block{block_id}_add1')([x, ffn1_out])
     
     # Multi-head self-attention
@@ -125,7 +119,7 @@ def conformer_block(x, dim, num_heads=4, ffn_expansion=4, conv_kernel_size=31, d
     
     # Second half-step FFN (scaled by 0.5)
     ffn2_out = feed_forward_module(x, dim, ffn_expansion, dropout, training, name_prefix=f'block{block_id}_ffn2')
-    ffn2_out = layers.Lambda(lambda x: 0.5 * x, name=f'block{block_id}_ffn2_scale')(ffn2_out)
+    ffn2_out = layers.Rescaling(0.5, name=f'block{block_id}_ffn2_scale')(ffn2_out)
     x = layers.Add(name=f'block{block_id}_add4')([x, ffn2_out])
     
     # Final layer norm
